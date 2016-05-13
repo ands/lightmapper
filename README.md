@@ -70,3 +70,8 @@ for (int i = 0; i < meshes; i++)
 
 # Quality improvement
 To improve the lightmapping quality on closed meshes it is recommended to disable backface culling and to write `(gl_FrontFacing ? 1.0 : 0.0)` into the alpha channel during scene rendering to mark valid and invalid geometry (look at [example.c](https://github.com/ands/lightmapper/blob/master/example/example.c) for more details). The lightmapper will use this information to discard lightmap texel results with too many invalid samples. These texels can then be filled in by calls to `lmImageDilate` during postprocessing.
+
+# Example images
+![Sphere Light](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_light.png)
+![Skybox](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_skybox.png)
+![Shadows and Reflections](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_shadows_reflections.png)
