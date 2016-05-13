@@ -1,11 +1,18 @@
 /***********************************************************
 * A single header file OpenGL lightmapping library         *
-* author: Andreas Mantler (ands) | last change: 13.05.2016 *
+* https://github.com/ands/lightmapper                      *
+* no warranty implied | use at your own risk               *
+* author: Andreas Mantler (ands) | last change: 14.05.2016 *
+*                                                          *
+* License:                                                 *
+* This software is in the public domain.                   *
+* Where that dedication is not recognized,                 *
+* you are granted a perpetual, irrevocable license to copy *
+* and modify this file however you want.                   *
 ***********************************************************/
 
-// TODO: accept different primitives?
-// TODO: load opengl calls? check version/extensions?
-// TODO: update usage example
+// TODO: accept different primitive types
+// TODO: maybe load the modern opengl calls? check version/extensions?
 
 #ifndef LIGHTMAPPER_H
 #define LIGHTMAPPER_H
@@ -14,6 +21,14 @@
 #define LM_DEFAULT_VALUE(value) = value
 #else
 #define LM_DEFAULT_VALUE(value)
+#endif
+
+#ifndef LM_CALLOC
+#define LM_CALLOC(count, size) calloc(count, size)
+#endif
+
+#ifndef LM_FREE
+#define LM_FREE(ptr) free(ptr)
 #endif
 
 typedef int lm_bool;
@@ -59,7 +74,7 @@ lm_bool lmBegin(lm_context *ctx,
 	float* outProjection4x4);                                                                          // output of the current camera projection matrix.
 
 int lmProgress(lm_context *ctx);                                                                       // should only be called between lmBegin/lmEnd!
-                                                                                                       // provides the currently processed triangle base index in the index/vertex array.
+                                                                                                       // provides the currently processed triangle base index for the index/vertex array.
 
 void lmEnd(lm_context *ctx);
 
@@ -83,41 +98,10 @@ void lmImageFtoUB(const float *image, unsigned char *outImage, int w, int h, int
 lm_bool lmImageSaveTGAub(const char *filename, const unsigned char *image, int w, int h, int c);
 lm_bool lmImageSaveTGAf(const char *filename, const float *image, int w, int h, int c, float max LM_DEFAULT_VALUE(0.0f));
 
-/****************************BEGIN SINGLE BOUNCE EXAMPLE************************************************/
-//const int w = 1024, h = 1024, c = 3;
-//float *lightmap = (float*)malloc(sizeof(float) * w * h * c);
-//
-//lm_context *ctx = lmCreate(&ctx, 64, 0.001f, 100.0f, 1.0f, 1.0f, 1.0f);
-//if (!ctx)
-//{
-//	printf("Could not initialize lightmapper.\n");
-//	exit(EXIT_FAILURE);
-//}
-//for (int i = 0; i < meshes; i++)
-//{
-//  memset(lightmap, 0, sizeof(float) * w * h * c); // clear lightmap to black
-//  
-//	lmSetLightmappedObject(&ctx, lightmap, w, h, c,
-//		mesh[i].positions, mesh[i].texCoords, mesh[i].indexCount, mesh[i].indices);
-//
-//	int vp[4];
-//	mat4 view, proj;
-//	while (lmBegin(&ctx, vp, &view[0][0], &proj[0][0]))
-//	{
-//		glViewport(vp[0], vp[1], vp[2], vp[3]);
-//		drawScene(view, proj);
-//		lmEnd(&ctx);
-//	}
-//
-//  // call lmImage* functions here if you want to postprocess the lightmap.
-//  lmImageSaveTGAf(mesh[i].lightmapFilename, lightmap, w, h, c);
-//}
-//lmDestroy(&ctx);
-/******************************END SINGLE BOUNCE EXAMPLE************************************************/
-
 #endif
-
+////////////////////// END OF HEADER //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #ifdef LIGHTMAPPER_IMPLEMENTATION
+#undef LIGHTMAPPER_IMPLEMENTATION
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -125,14 +109,6 @@ lm_bool lmImageSaveTGAf(const char *filename, const float *image, int w, int h, 
 #include <float.h>
 #include <assert.h>
 #include <limits.h>
-
-#ifndef LM_CALLOC
-#define LM_CALLOC(count, size) calloc(count, size)
-#endif
-
-#ifndef LM_FREE
-#define LM_FREE(ptr) free(ptr)
-#endif
 
 #define LM_SWAP(type, a, b) { type tmp = (a); (a) = (b); (b) = tmp; }
 
