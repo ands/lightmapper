@@ -14,7 +14,7 @@ Any light shapes and emissive surfaces are supported as long as you draw them wi
 You may want to use [thekla_atlas](https://github.com/Thekla/thekla_atlas) or [uvatlas](https://uvatlas.codeplex.com/) to prepare your geometry for lightmapping.
 
 # Example application
-![Lightmapper Example Screenshot](https://github.com/ands/lightmapper/raw/master/example/demo.png)
+![Lightmapper Example Screenshot](https://github.com/ands/lightmapper/raw/master/example_images/example.png)
 The provided [example application](https://github.com/ands/lightmapper/blob/master/example/example.c) should build on Windows/Linux/MacOSX.
 ```
 git clone --recursive https://github.com/ands/lightmapper.git
