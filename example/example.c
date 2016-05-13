@@ -9,7 +9,6 @@
 
 typedef struct {
 	float p[3];
-	float n[3];
 	float t[2];
 } vertex_t;
 static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
@@ -172,9 +171,7 @@ int main(int argc, char* argv[])
 	glEnableVertexAttribArray(0);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, p));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, n));
-	glEnableVertexAttribArray(2);
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, t));
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, t));
 
 	glGenTextures(1, &scene.lightmap);
 	glBindTexture(GL_TEXTURE_2D, scene.lightmap);
@@ -187,32 +184,22 @@ int main(int argc, char* argv[])
 
 	const char *vp =
 		"#version 150 core\n"
-
 		"in vec3 a_position;\n"
-		"in vec3 a_normal;\n"
 		"in vec2 a_texcoord;\n"
-
 		"uniform mat4 u_view;\n"
 		"uniform mat4 u_projection;\n"
-
-		"out vec3 v_normal;\n"
 		"out vec2 v_texcoord;\n"
 
 		"void main()\n"
 		"{\n"
 			"gl_Position = u_projection * (u_view * vec4(a_position, 1.0));\n"
-			"v_normal = (u_view * vec4(a_normal, 0.0)).xyz;\n"
 			"v_texcoord = a_texcoord;\n"
 		"}\n";
 
 	const char *fp =
 		"#version 150 core\n"
-
-		"in vec3 v_normal;\n"
 		"in vec2 v_texcoord;\n"
-
 		"uniform sampler2D u_lightmap;\n"
-
 		"out vec4 o_color;\n"
 
 		"void main()\n"
@@ -297,7 +284,7 @@ static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned
 		if (line[0] == 'v')
 		{
 			if (line[1] == ' ') { float *p = (*vertices)[cp++].p; char *e1, *e2; p[0] = (float)strtod(line + 2, &e1); p[1] = (float)strtod(e1, &e2); p[2] = (float)strtod(e2, 0); continue; }
-			if (line[1] == 'n') { float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0); continue; }
+			if (line[1] == 'n') { /*float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0);*/ continue; }
 			if (line[1] == 't') { float *t = (*vertices)[ct++].t; char *e1;      t[0] = (float)strtod(line + 3, &e1); t[1] = (float)strtod(e1, 0);                                continue; }
 			assert(!"unknown vertex attribute");
 		}
