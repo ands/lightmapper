@@ -120,6 +120,7 @@ lm_bool lmImageSaveTGAf(const char *filename, const float *image, int w, int h, 
 #ifdef LIGHTMAPPER_IMPLEMENTATION
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
 #include <float.h>
 #include <assert.h>
@@ -135,7 +136,7 @@ lm_bool lmImageSaveTGAf(const char *filename, const float *image, int w, int h, 
 
 #define LM_SWAP(type, a, b) { type tmp = (a); (a) = (b); (b) = tmp; }
 
-#if defined(_MSC_VER) // TODO: specific versions only?
+#if defined(_MSC_VER) && !defined(__cplusplus) // TODO: specific versions only?
 #define inline __inline
 #endif
 
@@ -570,7 +571,7 @@ static void lm_finishProcessHemisphereBatch(lm_context *ctx)
 	assert(hemi);
 	if (!hemi)
 	{
-		printf("Fatal error! Could not map hemisphere buffer!\n");
+		fprintf(stderr, "Fatal error! Could not map hemisphere buffer!\n");
 		exit(-1);
 	}
 
@@ -871,7 +872,7 @@ static GLuint lm_LoadShader(GLenum type, const char *source)
 	GLuint shader = glCreateShader(type);
 	if (shader == 0)
 	{
-		printf("Could not create shader!\n");
+		fprintf(stderr, "Could not create shader!\n");
 		return 0;
 	}
 	glShaderSource(shader, 1, &source, NULL);
@@ -880,14 +881,14 @@ static GLuint lm_LoadShader(GLenum type, const char *source)
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
 	if (!compiled)
 	{
-		printf("Could not compile shader!\n");
+		fprintf(stderr, "Could not compile shader!\n");
 		GLint infoLen = 0;
 		glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
 		if (infoLen)
 		{
 			char* infoLog = (char*)malloc(infoLen);
 			glGetShaderInfoLog(shader, infoLen, NULL, infoLog);
-			printf("%s\n", infoLog);
+			fprintf(stderr, "%s\n", infoLog);
 			free(infoLog);
 		}
 		glDeleteShader(shader);
@@ -901,7 +902,7 @@ static GLuint lm_LoadProgram(const char *vp, const char *fp)
 	GLuint program = glCreateProgram();
 	if (program == 0)
 	{
-		printf("Could not create program!\n");
+		fprintf(stderr, "Could not create program!\n");
 		return 0;
 	}
 	GLuint vertexShader = lm_LoadShader(GL_VERTEX_SHADER, vp);
@@ -915,14 +916,14 @@ static GLuint lm_LoadProgram(const char *vp, const char *fp)
 	glGetProgramiv(program, GL_LINK_STATUS, &linked);
 	if (!linked)
 	{
-		printf("Could not link program!\n");
+		fprintf(stderr, "Could not link program!\n");
 		GLint infoLen = 0;
 		glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLen);
 		if (infoLen)
 		{
 			char* infoLog = (char*)malloc(sizeof(char) * infoLen);
 			glGetProgramInfoLog(program, infoLen, NULL, infoLog);
-			printf("%s\n", infoLog);
+			fprintf(stderr, "%s\n", infoLog);
 			free(infoLog);
 		}
 		glDeleteProgram(program);
@@ -984,7 +985,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 		GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 		if (status != GL_FRAMEBUFFER_COMPLETE)
 		{
-			printf("Could not create framebuffer!\n");
+			fprintf(stderr, "Could not create framebuffer!\n");
 			glDeleteRenderbuffers(1, &ctx->hemisphere.fbDepth);
 			glDeleteFramebuffers(2, ctx->hemisphere.fb);
 			glDeleteTextures(2, ctx->hemisphere.fbTexture);
@@ -1046,7 +1047,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 		ctx->hemisphere.firstPass.programID = lm_LoadProgram(vs, fs);
 		if (!ctx->hemisphere.firstPass.programID)
 		{
-			printf("Error loading the hemisphere first pass shader program... leaving!\n");
+			fprintf(stderr, "Error loading the hemisphere first pass shader program... leaving!\n");
 			glDeleteVertexArrays(1, &ctx->hemisphere.vao);
 			glDeleteRenderbuffers(1, &ctx->hemisphere.fbDepth);
 			glDeleteFramebuffers(2, ctx->hemisphere.fb);
@@ -1085,7 +1086,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 		ctx->hemisphere.downsamplePass.programID = lm_LoadProgram(vs, fs);
 		if (!ctx->hemisphere.downsamplePass.programID)
 		{
-			printf("Error loading the hemisphere downsample pass shader program... leaving!\n");
+			fprintf(stderr, "Error loading the hemisphere downsample pass shader program... leaving!\n");
 			glDeleteProgram(ctx->hemisphere.firstPass.programID);
 			glDeleteVertexArrays(1, &ctx->hemisphere.vao);
 			glDeleteRenderbuffers(1, &ctx->hemisphere.fbDepth);
