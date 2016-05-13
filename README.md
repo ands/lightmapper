@@ -1,4 +1,4 @@
-# lightmapper
+# Lightmapper
 lightmapper.h is a C/C++ single-file library for lightmap baking by using your existing OpenGL renderer.
 
 To paste the implementation into your project, insert the following lines:
@@ -13,9 +13,18 @@ Any light shapes and emissive surfaces are supported as long as you draw them wi
 
 You may want to use [thekla_atlas](https://github.com/Thekla/thekla_atlas) or [uvatlas](https://uvatlas.codeplex.com/) to prepare your geometry for lightmapping.
 
+# Example application
 ![Lightmapper Example Screenshot](https://github.com/ands/lightmapper/raw/master/example/demo.png)
+The provided [example application](https://github.com/ands/lightmapper/blob/master/example/example.c) should build on Windows/Linux/MacOSX.
+```
+git clone --recursive https://github.com/ands/lightmapper.git
+cd lightmapper/example
+cmake .
+make
+./example
+```
 
-# Example
+# Example usage
 ```
 lm_context *ctx = lmCreate(64, 0.001f, 100.0f, 1.0f, 1.0f, 1.0f); // rendering resolution/quality, zNear, zFar, sky/clear color
 if (!ctx)
@@ -59,4 +68,5 @@ for (int i = 0; i < meshes; i++)
 }
 ```
 
-To improve the lightmapping quality on closed meshes it is recommended to disable backface culling and to write `(gl_FrontFacing ? 1.0 : 0.0)` into the alpha channel during scene rendering to mark valid and invalid geometry (look at example.c for more details). The lightmapper will use this information to discard lightmap texel results with too many invalid samples. These texels can then be filled in by calls to `lmImageDilate` during postprocessing.
+# Quality improvement
+To improve the lightmapping quality on closed meshes it is recommended to disable backface culling and to write `(gl_FrontFacing ? 1.0 : 0.0)` into the alpha channel during scene rendering to mark valid and invalid geometry (look at [example.c](https://github.com/ands/lightmapper/blob/master/example/example.c) for more details). The lightmapper will use this information to discard lightmap texel results with too many invalid samples. These texels can then be filled in by calls to `lmImageDilate` during postprocessing.
