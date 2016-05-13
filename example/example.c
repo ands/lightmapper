@@ -1,6 +1,8 @@
+#include <stdlib.h>
 #include <stdio.h>
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <assert.h>
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
 
@@ -11,26 +13,6 @@ typedef struct {
 	float p[3];
 	float t[2];
 } vertex_t;
-static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
-
-static GLuint loadProgram(const char *vp, const char *fp);
-
-static void fpsCameraViewMatrix(GLFWwindow *window, float *view);
-static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar);
-
-static void error_callback(int error, const char *description)
-{
-	fprintf(stderr, "Error: %s\n", description);
-}
-
-static void APIENTRY debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const void *userParam)
-{
-#ifndef GL_DEBUG_SEVERITY_NOTIFICATION
-#define GL_DEBUG_SEVERITY_NOTIFICATION 0x826B
-#endif
-	if (severity != GL_DEBUG_SEVERITY_NOTIFICATION)
-		fprintf(stderr, "Error: %s\n", message);
-}
 
 typedef struct
 {
@@ -38,13 +20,237 @@ typedef struct
 	GLint u_lightmap;
 	GLint u_projection;
 	GLint u_view;
-	
+
 	GLuint lightmap;
+	int w, h;
+
 	GLuint vao, vbo, ibo;
 	vertex_t *vertices;
 	unsigned short *indices;
 	unsigned int vertexCount, indexCount;
 } scene_t;
+
+static int initScene(scene_t *scene);
+static void drawScene(scene_t *scene, float *view, float *projection);
+static void destroyScene(scene_t *scene);
+
+static int bake(scene_t *scene)
+{
+	lm_context *ctx = lmCreate(32, 0.001f, 100.0f, 1.0f, 1.0f, 1.0f);
+	if (!ctx)
+	{
+		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
+		return 0;
+	}
+	
+	int w = scene->w, h = scene->h;
+	float *data = calloc(w * h * 4, sizeof(float));
+	lmSetTargetLightmap(ctx, data, w, h, 4);
+
+	lmSetGeometry(ctx, NULL,
+		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, p), sizeof(vertex_t),
+		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, t), sizeof(vertex_t),
+		scene->indexCount, LM_UNSIGNED_SHORT, scene->indices);
+
+	int vp[4];
+	float view[16], projection[16];
+	double lastUpdateTime = 0.0;
+	while (lmBegin(ctx, vp, view, projection))
+	{
+		// render to lightmapper framebuffer
+		glViewport(vp[0], vp[1], vp[2], vp[3]);
+		drawScene(scene, view, projection);
+
+		// display progress every second (printf is expensive)
+		double time = glfwGetTime();
+		if (time - lastUpdateTime > 1.0)
+		{
+			lastUpdateTime = time;
+			printf("\r%d/%d    ", lmProgress(ctx) / 3, scene->indexCount / 3);
+		}
+
+		lmEnd(ctx);
+	}
+	printf("\rFinished baking %d triangles.\n", scene->indexCount / 3);
+	
+	lmDestroy(ctx);
+
+	// postprocess texture
+	float *temp = calloc(w * h * 4, sizeof(float));
+	lmImageSmooth(data, temp, w, h, 4);
+	lmImageDilate(temp, data, w, h, 4);
+	for (int i = 0; i < 16; i++)
+	{
+		lmImageDilate(data, temp, w, h, 4);
+		lmImageDilate(temp, data, w, h, 4);
+	}
+	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
+	free(temp);
+
+	// save result to a file
+	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
+		printf("Saved result.tga\n");
+
+	// upload result
+	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
+	free(data);
+
+	return 1;
+}
+
+static void error_callback(int error, const char *description)
+{
+	fprintf(stderr, "Error: %s\n", description);
+}
+
+static void fpsCameraViewMatrix(GLFWwindow *window, float *view);
+static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar);
+
+int main(int argc, char* argv[])
+{
+	glfwSetErrorCallback(error_callback);
+	if (!glfwInit()) return 1;
+	glfwWindowHint(GLFW_RED_BITS, 8);
+	glfwWindowHint(GLFW_GREEN_BITS, 8);
+	glfwWindowHint(GLFW_BLUE_BITS, 8);
+	glfwWindowHint(GLFW_ALPHA_BITS, 8);
+	glfwWindowHint(GLFW_DEPTH_BITS, 32);
+	glfwWindowHint(GLFW_STENCIL_BITS, GLFW_DONT_CARE);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+	glfwWindowHint(GLFW_SAMPLES, 4);
+	GLFWwindow *window = glfwCreateWindow(1024, 768, "Lightmapping Example", NULL, NULL);
+	if (!window) return 1;
+	glfwMakeContextCurrent(window);
+	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+	glfwSwapInterval(1);
+
+	scene_t scene = {0};
+	if (!initScene(&scene))
+	{
+		fprintf(stderr, "Could not initialize scene.\n");
+		return 1;
+	}
+
+	printf("Ambient Occlusion Baking Example.\n");
+	printf("Use your mouse and the W, A, S, D, E, Q keys to navigate.\n");
+	printf("Press SPACE to start baking one light bounce!\n");
+	printf("This will take a few seconds and bake a lightmap illuminated by:\n");
+	printf("1. The mesh itself (initially black)\n");
+	printf("2. A white sky (1.0f, 1.0f, 1.0f)\n");
+
+	while (!glfwWindowShouldClose(window))
+	{
+		glfwPollEvents();
+		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+			bake(&scene);
+
+		int w, h;
+		glfwGetFramebufferSize(window, &w, &h);
+		glViewport(0, 0, w, h);
+
+		// camera for glfw window
+		float view[16], projection[16];
+		fpsCameraViewMatrix(window, view);
+		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
+		
+		// draw to screen with a blueish sky
+		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		drawScene(&scene, view, projection);
+
+		glfwSwapBuffers(window);
+	}
+
+	destroyScene(&scene);
+	glfwDestroyWindow(window);
+	glfwTerminate();
+	return 0;
+}
+
+// helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
+static GLuint loadProgram(const char *vp, const char *fp);
+
+static int initScene(scene_t *scene)
+{
+	// load mesh
+	if (!loadSimpleObjFile("gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
+	{
+		fprintf(stderr, "Error loading obj file\n");
+		return 0;
+	}
+
+	glGenVertexArrays(1, &scene->vao);
+	glBindVertexArray(scene->vao);
+
+	glGenBuffers(1, &scene->vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, scene->vbo);
+	glBufferData(GL_ARRAY_BUFFER, scene->vertexCount * sizeof(vertex_t), scene->vertices, GL_STATIC_DRAW);
+
+	glGenBuffers(1, &scene->ibo);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, scene->ibo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, scene->indexCount * sizeof(unsigned short), scene->indices, GL_STATIC_DRAW);
+
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, p));
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, t));
+
+	// create lightmap texture
+	scene->w = 654;
+	scene->h = 654;
+	glGenTextures(1, &scene->lightmap);
+	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	unsigned char emissive[] = { 0, 0, 0, 255 };
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
+
+	// load shader
+	const char *vp =
+		"#version 150 core\n"
+		"in vec3 a_position;\n"
+		"in vec2 a_texcoord;\n"
+		"uniform mat4 u_view;\n"
+		"uniform mat4 u_projection;\n"
+		"out vec2 v_texcoord;\n"
+
+		"void main()\n"
+		"{\n"
+		"gl_Position = u_projection * (u_view * vec4(a_position, 1.0));\n"
+		"v_texcoord = a_texcoord;\n"
+		"}\n";
+
+	const char *fp =
+		"#version 150 core\n"
+		"in vec2 v_texcoord;\n"
+		"uniform sampler2D u_lightmap;\n"
+		"out vec4 o_color;\n"
+
+		"void main()\n"
+		"{\n"
+		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
+		"}\n";
+
+	scene->program = loadProgram(vp, fp);
+	if (!scene->program)
+	{
+		fprintf(stderr, "Error loading shader\n");
+		return 0;
+	}
+	scene->u_view = glGetUniformLocation(scene->program, "u_view");
+	scene->u_projection = glGetUniformLocation(scene->program, "u_projection");
+	scene->u_lightmap = glGetUniformLocation(scene->program, "u_lightmap");
+
+	return 1;
+}
 
 static void drawScene(scene_t *scene, float *view, float *projection)
 {
@@ -59,188 +265,17 @@ static void drawScene(scene_t *scene, float *view, float *projection)
 
 	glBindVertexArray(scene->vao);
 	glDrawElements(GL_TRIANGLES, scene->indexCount, GL_UNSIGNED_SHORT, 0);
-	glBindVertexArray(0);
 }
 
-static int bake(GLuint lightmap, int w, int h, vertex_t *vertices, unsigned short *indices, unsigned int indexCount, scene_t *scene)
+static void destroyScene(scene_t *scene)
 {
-	lm_context *lightmapper = lmCreate(
-		32, 0.001f, 100.0f,
-		1.0f, 1.0f, 1.0f);
-	if (!lightmapper)
-	{
-		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
-		return 0;
-	}
-	
-	float *data = calloc(w * h * 4, sizeof(float));
-	lmSetTargetLightmap(lightmapper, data, w, h, 4);
-
-	lmSetGeometry(lightmapper, NULL,
-		LM_FLOAT, (unsigned char*)vertices + offsetof(vertex_t, p), sizeof(vertex_t),
-		LM_FLOAT, (unsigned char*)vertices + offsetof(vertex_t, t), sizeof(vertex_t),
-		indexCount, LM_UNSIGNED_SHORT, indices);
-
-	int vp[4];
-	float view[16], projection[16];
-	while (lmBegin(lightmapper, vp, view, projection))
-	{
-		glViewport(vp[0], vp[1], vp[2], vp[3]);
-		drawScene(scene, &view, &projection);
-		if (lmProgress(lightmapper) % 9 == 0 && lightmapper->meshPosition.hemisphere.side == 0) // TODO
-			printf("\r%d/%d    ", lmProgress(lightmapper), indexCount);
-		lmEnd(lightmapper);
-	}
-	printf("\r%d/%d    \n", lmProgress(lightmapper), indexCount);
-	
-	lmDestroy(lightmapper);
-
-	// postprocess
-	float *temp = calloc(w * h * 4, sizeof(float));
-	lmImageSmooth(data, temp, w, h, 4);
-	lmImageDilate(temp, data, w, h, 4);
-	for (int i = 0; i < 16; i++)
-	{
-		lmImageDilate(data, temp, w, h, 4);
-		lmImageDilate(temp, data, w, h, 4);
-	}
-	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
-	free(temp);
-
-	// save result to a file
-	lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f);
-
-	// upload result
-	glBindTexture(GL_TEXTURE_2D, lightmap);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
-	free(data);
-
-	return 1;
-}
-
-int main(int argc, char* argv[])
-{
-	glfwSetErrorCallback(error_callback);
-	if (!glfwInit())
-		return 1;
-	glfwWindowHint(GLFW_RED_BITS, 8);
-	glfwWindowHint(GLFW_GREEN_BITS, 8);
-	glfwWindowHint(GLFW_BLUE_BITS, 8);
-	glfwWindowHint(GLFW_ALPHA_BITS, 8);
-	glfwWindowHint(GLFW_DEPTH_BITS, 32);
-	glfwWindowHint(GLFW_STENCIL_BITS, GLFW_DONT_CARE);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-	glfwWindowHint(GLFW_SAMPLES, 4);
-	GLFWwindow *window = glfwCreateWindow(1280, 800, "Lightmapper Example", NULL, NULL);
-	if (!window)
-		return 1;
-	glfwMakeContextCurrent(window);
-	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-	glfwSwapInterval(1);
-
-	// debug callback
-	typedef void (APIENTRYP PFNGLDEBUGMESSAGECALLBACKPROC) (GLDEBUGPROC callback, const void *userParam);
-	PFNGLDEBUGMESSAGECALLBACKPROC glDebugMessageCallback = (PFNGLDEBUGMESSAGECALLBACKPROC)glfwGetProcAddress("glDebugMessageCallback");
-	if (glDebugMessageCallback)
-		glDebugMessageCallback(debug_callback, NULL);
-	else
-		printf("No debug message callback :(\n");
-
-	scene_t scene = {0};
-	if (!loadSimpleObjFile("gazebo.obj", &scene.vertices, &scene.vertexCount, &scene.indices, &scene.indexCount))
-	{
-		fprintf(stderr, "Error loading obj file\n");
-		exit(1);
-	}
-
-	glGenVertexArrays(1, &scene.vao);
-	glBindVertexArray(scene.vao);
-	
-	glGenBuffers(1, &scene.vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, scene.vbo);
-	glBufferData(GL_ARRAY_BUFFER, scene.vertexCount * sizeof(vertex_t), scene.vertices, GL_STATIC_DRAW);
-
-	glGenBuffers(1, &scene.ibo);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, scene.ibo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, scene.indexCount * sizeof(unsigned short), scene.indices, GL_STATIC_DRAW);
-
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, p));
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, t));
-
-	glGenTextures(1, &scene.lightmap);
-	glBindTexture(GL_TEXTURE_2D, scene.lightmap);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	unsigned char emissive[] = { 0, 0, 0, 255 };
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
-
-	const char *vp =
-		"#version 150 core\n"
-		"in vec3 a_position;\n"
-		"in vec2 a_texcoord;\n"
-		"uniform mat4 u_view;\n"
-		"uniform mat4 u_projection;\n"
-		"out vec2 v_texcoord;\n"
-
-		"void main()\n"
-		"{\n"
-			"gl_Position = u_projection * (u_view * vec4(a_position, 1.0));\n"
-			"v_texcoord = a_texcoord;\n"
-		"}\n";
-
-	const char *fp =
-		"#version 150 core\n"
-		"in vec2 v_texcoord;\n"
-		"uniform sampler2D u_lightmap;\n"
-		"out vec4 o_color;\n"
-
-		"void main()\n"
-		"{\n"
-			"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
-		"}\n";
-
-	scene.program = loadProgram(vp, fp);
-	if (!scene.program)
-	{
-		fprintf(stderr, "Error loading shader\n");
-		exit(1);
-	}
-	scene.u_view = glGetUniformLocation(scene.program, "u_view");
-	scene.u_projection = glGetUniformLocation(scene.program, "u_projection");
-	scene.u_lightmap = glGetUniformLocation(scene.program, "u_lightmap");
-
-	while (!glfwWindowShouldClose(window))
-	{
-		glfwPollEvents();
-		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-			bake(scene.lightmap, 654, 654, scene.vertices, scene.indices, scene.indexCount, &scene);
-
-		int w, h;
-		glfwGetFramebufferSize(window, &w, &h);
-		glViewport(0, 0, w, h);
-
-		float view[16], projection[16];
-		fpsCameraViewMatrix(window, view);
-		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-		
-		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		drawScene(&scene, view, projection);
-
-		glfwSwapBuffers(window);
-	}
-
-	glfwDestroyWindow(window);
-	glfwTerminate();
-	return 0;
+	free(scene->vertices);
+	free(scene->indices);
+	glDeleteVertexArrays(1, &scene->vao);
+	glDeleteBuffers(1, &scene->vbo);
+	glDeleteBuffers(1, &scene->ibo);
+	glDeleteTextures(1, &scene->lightmap);
+	glDeleteProgram(scene->program);
 }
 
 static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount)
@@ -284,7 +319,7 @@ static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned
 		if (line[0] == 'v')
 		{
 			if (line[1] == ' ') { float *p = (*vertices)[cp++].p; char *e1, *e2; p[0] = (float)strtod(line + 2, &e1); p[1] = (float)strtod(e1, &e2); p[2] = (float)strtod(e2, 0); continue; }
-			if (line[1] == 'n') { /*float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0);*/ continue; }
+			if (line[1] == 'n') { /*float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0);*/ continue; } // no normals needed
 			if (line[1] == 't') { float *t = (*vertices)[ct++].t; char *e1;      t[0] = (float)strtod(line + 3, &e1); t[1] = (float)strtod(e1, 0);                                continue; }
 			assert(!"unknown vertex attribute");
 		}
