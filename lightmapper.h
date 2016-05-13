@@ -1,12 +1,11 @@
 /***********************************************************
 * A single header file OpenGL lightmapping library         *
-* author: Andreas Mantler (ands) | last change: 12.04.2016 *
+* author: Andreas Mantler (ands) | last change: 13.05.2016 *
 ***********************************************************/
 
-// TODO: accept a transformation matrix for the geometry
-// TODO: accept different data types for vertex data? different primitives?
+// TODO: accept different primitives?
 // TODO: load opengl calls? check version/extensions?
-// TODO: split lmSetLightmappedObject into lmSetGeometry and lmSetLightmap!
+// TODO: update usage example
 
 #ifndef LIGHTMAPPER_H
 #define LIGHTMAPPER_H
