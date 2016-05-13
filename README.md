@@ -75,3 +75,11 @@ To improve the lightmapping quality on closed meshes it is recommended to disabl
 ![Sphere Light](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_light.png)
 ![Skybox](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_skybox.png)
 ![Shadows and Reflections](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_shadows_reflections.png)
+
+# Thanks
+- To Ignacio Castaño and Jonathan Blow for blogging about their lightmapping system for The Witness.
+- To Sean Barrett for his library design philosophy.
+- To Nyamyam Ltd. for letting me use their engine and assets during my master's thesis for which I started my work on this library.
+- To Apoorva Joshi for trying to find a graphics driver performance anomaly.
+- To Teh_Bucket for this public domain gazebo model on OpenGameArt.org.
+- To everybody who I forgot :)
