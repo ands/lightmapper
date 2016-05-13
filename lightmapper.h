@@ -1424,7 +1424,7 @@ lm_bool lmImageSaveTGAub(const char *filename, const unsigned char *image, int w
 	if (fopen_s(&file, filename, "wb") != 0) return LM_FALSE;
 #else
 	FILE *file = fopen(filename, "wb");
-	if (!file) return false;
+	if (!file) return LM_FALSE;
 #endif
 	fwrite(header, 1, sizeof(header), file);
 
