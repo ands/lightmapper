@@ -16,6 +16,8 @@ You may want to use [thekla_atlas](https://github.com/Thekla/thekla_atlas) or [u
 # Example application
 ![Lightmapper Example Screenshot](https://github.com/ands/lightmapper/raw/master/example_images/example.png)
 The provided [example application](https://github.com/ands/lightmapper/blob/master/example/example.c) should build on Windows/Linux/MacOSX.
+
+Linux dependencies for glfw: xorg-dev libgl1-mesa-dev
 ```
 git clone --recursive https://github.com/ands/lightmapper.git
 cd lightmapper/example
