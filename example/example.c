@@ -175,7 +175,7 @@ int main(int argc, char* argv[])
 
 // helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
-static GLuint loadProgram(const char *vp, const char *fp);
+static GLuint loadProgram(const char *vp, const char *fp, const char **attributes, int attributeCount);
 
 static int initScene(scene_t *scene)
 {
@@ -240,7 +240,13 @@ static int initScene(scene_t *scene)
 		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
 		"}\n";
 
-	scene->program = loadProgram(vp, fp);
+    const char *attribs[] =
+    {
+        "a_position",
+        "a_texcoord"
+    };
+    
+	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
 	{
 		fprintf(stderr, "Error loading shader\n");
@@ -377,7 +383,7 @@ static GLuint loadShader(GLenum type, const char *source)
 	}
 	return shader;
 }
-static GLuint loadProgram(const char *vp, const char *fp)
+static GLuint loadProgram(const char *vp, const char *fp, const char **attributes, int attributeCount)
 {
 	GLuint vertexShader = loadShader(GL_VERTEX_SHADER, vp);
 	if (!vertexShader)
@@ -397,6 +403,10 @@ static GLuint loadProgram(const char *vp, const char *fp)
 	}
 	glAttachShader(program, vertexShader);
 	glAttachShader(program, fragmentShader);
+    
+    for (int i = 0; i < attributeCount; i++)
+        glBindAttribLocation(program, i, attributes[i]);
+    
 	glLinkProgram(program);
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
