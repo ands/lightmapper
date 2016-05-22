@@ -1,6 +1,6 @@
+#define _USE_MATH_DEFINES
 #include <stdlib.h>
 #include <stdio.h>
-#define _USE_MATH_DEFINES
 #include <math.h>
 #include <assert.h>
 #include "glad/glad.h"
@@ -8,6 +8,10 @@
 
 #define LIGHTMAPPER_IMPLEMENTATION
 #include "../lightmapper.h"
+
+#ifndef M_PI // even with _USE_MATH_DEFINES not always available
+#define M_PI 3.14159265358979323846
+#endif
 
 typedef struct {
 	float p[3];
