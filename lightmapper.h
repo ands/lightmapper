@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 14.05.2016 *
+* author: Andreas Mantler (ands) | last change: 12.06.2016 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -1011,7 +1011,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 
 			"void main()\n"
 			"{\n" // this is a weighted sum downsampling pass (alpha component contains the weighted valid sample count)
-				"vec2 in_uv = gl_FragCoord.xy * vec2(6.0, 2.0) + vec2(0.5);\n"
+				"vec2 in_uv = (gl_FragCoord.xy - vec2(0.5)) * vec2(6.0, 2.0) + vec2(0.01);\n"
 				"ivec2 h_uv = ivec2(in_uv);\n"
 				"ivec2 w_uv = ivec2(mod(in_uv, vec2(textureSize(weights, 0))));\n" // there's no integer modulo :(
 				"vec4 lb = threeWeightedSamples(h_uv, w_uv, ivec2(0, 0));\n"
@@ -1052,7 +1052,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 
 			"void main()\n"
 			"{\n" // this is a sum downsampling pass (alpha component contains the weighted valid sample count)
-				"ivec2 h_uv = ivec2((gl_FragCoord.xy - vec2(0.25)) * 2.0);\n"
+				"ivec2 h_uv = ivec2((gl_FragCoord.xy - vec2(0.5)) * 2.0 + vec2(0.01));\n"
 				"vec4 lb = texelFetch(hemispheres, h_uv + ivec2(0, 0), 0);\n"
 				"vec4 rb = texelFetch(hemispheres, h_uv + ivec2(1, 0), 0);\n"
 				"vec4 lt = texelFetch(hemispheres, h_uv + ivec2(0, 1), 0);\n"
@@ -1134,23 +1134,27 @@ void lmSetHemisphereWeights(lm_context *ctx, lm_weight_func f, void *userdata)
 		for (unsigned int x = 0; x < ctx->hemisphere.size; x++)
 		{
 			float dx = 2.0f * (x - center) / (float)ctx->hemisphere.size;
-			lm_vec3 v = lm_v3(dx, dy, 1.0f);
-			float il2 = 1.0f / lm_length3sq(v);
-			v = lm_normalize3(v);
+			lm_vec3 v = lm_normalize3(lm_v3(dx, dy, 1.0f));
+
+			float solidAngle = v.z * v.z * v.z;
+
+			float *w0 = weights + 2 * (y * (3 * ctx->hemisphere.size) + x);
+			float *w1 = w0 + 2 * ctx->hemisphere.size;
+			float *w2 = w1 + 2 * ctx->hemisphere.size;
 
 			// center weights
-			weights[2 * (y * 3 * ctx->hemisphere.size + x) + 0] = il2 * f(v.z, userdata);
-			weights[2 * (y * 3 * ctx->hemisphere.size + x) + 1] = il2;
+			w0[0] = solidAngle * f(v.z, userdata);
+			w0[1] = solidAngle;
 
 			// left/right side weights
-			weights[2 * (y * 3 * ctx->hemisphere.size + ctx->hemisphere.size + x) + 0] = il2 * f(lm_absf(v.x), userdata);
-			weights[2 * (y * 3 * ctx->hemisphere.size + ctx->hemisphere.size + x) + 1] = il2;
+			w1[0] = solidAngle * f(lm_absf(v.x), userdata);
+			w1[1] = solidAngle;
 
 			// up/down side weights
-			weights[2 * (y * 3 * ctx->hemisphere.size + 2 * ctx->hemisphere.size + x) + 0] = il2 * f(lm_absf(v.y), userdata);
-			weights[2 * (y * 3 * ctx->hemisphere.size + 2 * ctx->hemisphere.size + x) + 1] = il2;
+			w2[0] = solidAngle * f(lm_absf(v.y), userdata);
+			w2[1] = solidAngle;
 
-			sum += 3.0 * (double)il2;
+			sum += 3.0 * (double)solidAngle;
 		}
 	}
 
