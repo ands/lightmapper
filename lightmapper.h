@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 12.06.2016 *
+* author: Andreas Mantler (ands) | last change: 12.07.2016 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -11,7 +11,7 @@
 * and modify this file however you want.                   *
 ***********************************************************/
 
-// TODO: accept different primitive types
+// TODO: accept different primitive types?
 // TODO: maybe load the modern opengl calls? check version/extensions?
 
 #ifndef LIGHTMAPPER_H
@@ -48,7 +48,12 @@ typedef struct lm_context lm_context;
 lm_context *lmCreate(
 	int hemisphereSize,                                                                                // hemisphereSize: resolution of the hemisphere renderings. must be a power of two! typical: 64.
 	float zNear, float zFar,                                                                           // zNear/zFar: hemisphere min/max draw distances.
-	float clearR, float clearG, float clearB);                                                         // clear color / background color / sky color.
+	float clearR, float clearG, float clearB,                                                          // clear color / background color / sky color.
+	float interpolationThreshold);                                                                     // interpolationThreshold: error value below which lightmap pixels are interpolated instead of rendered.
+                                                                                                       // use output image from LM_DEBUG_INTERPOLATION to determine a good value.
+                                                                                                       // values around and below 0.01 are probably ok.
+                                                                                                       // the lower the value, the more hemispheres are rendered -> slower, but possibly better quality.
+                                                                                                       // a negative threshold value disables interpolation entirely.
 
 // optional: set material characteristics by specifying cos(theta)-dependent weights for incoming light.
 typedef float (*lm_weight_func)(float cos_theta, void *userdata);
@@ -265,6 +270,8 @@ struct lm_context
 
 	struct
 	{
+		int pass;
+
 		struct
 		{
 			unsigned int baseIndex;
@@ -298,6 +305,10 @@ struct lm_context
 		int height;
 		int channels;
 		float *data;
+
+#ifdef LM_DEBUG_INTERPOLATION
+		unsigned char *debug;
+#endif
 	} lightmap;
 
 	struct
@@ -334,7 +345,18 @@ struct lm_context
 			lm_ivec2 *fbHemiToLightmapLocation;
 		} transfer;
 	} hemisphere;
+
+	float interpolationThreshold;
 };
+
+// pass order for one 4x4 interpolation patch (and the next neighbors right of/below it)
+// 0 4 1 4 0
+// 5 6 5 6 5
+// 2 4 3 4 2
+// 5 6 5 6 5
+// 0 4 1 4 0
+static const int lm_passOffsetX[] = { 0, 2, 0, 2, 1, 0, 1 };
+static const int lm_passOffsetY[] = { 0, 0, 2, 2, 0, 1, 1 };
 
 static lm_bool lm_hasConservativeTriangleRasterizerFinished(lm_context *ctx)
 {
@@ -343,11 +365,27 @@ static lm_bool lm_hasConservativeTriangleRasterizerFinished(lm_context *ctx)
 
 static void lm_moveToNextPotentialConservativeTriangleRasterizerPosition(lm_context *ctx)
 {
-	if (++ctx->meshPosition.rasterizer.x >= ctx->meshPosition.rasterizer.maxx)
+	// the first few passes work with 4x4 grids, while the later ones work with 2x2 grids
+	int inc = ctx->meshPosition.pass < 4 ? 4 : 2;
+	ctx->meshPosition.rasterizer.x += inc;
+	if (ctx->meshPosition.rasterizer.x >= ctx->meshPosition.rasterizer.maxx)
 	{
-		ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx;
-		++ctx->meshPosition.rasterizer.y;
+		ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX[ctx->meshPosition.pass];
+		ctx->meshPosition.rasterizer.y += inc;
 	}
+}
+
+static float *lm_getLightmapPixel(lm_context *ctx, int x, int y)
+{
+	assert(x >= 0 && x < ctx->lightmap.width && y >= 0 && y < ctx->lightmap.height);
+	return ctx->lightmap.data + (y * ctx->lightmap.width + x) * ctx->lightmap.channels;
+}
+
+static void lm_setLightmapPixel(lm_context *ctx, int x, int y, float *in)
+{
+	assert(x >= 0 && x < ctx->lightmap.width && y >= 0 && y < ctx->lightmap.height);
+	float *p = ctx->lightmap.data + (y * ctx->lightmap.width + x) * ctx->lightmap.channels;
+	memcpy(p, in, ctx->lightmap.channels * sizeof(float));
 }
 
 static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *ctx)
@@ -355,6 +393,80 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 	if (lm_hasConservativeTriangleRasterizerFinished(ctx))
 		return LM_FALSE;
 
+	// check if lightmap pixel was already set
+	float *pixelValue = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y);
+	for (int j = 0; j < ctx->lightmap.channels; j++)
+		if (pixelValue[j] != 0.0f)
+			return LM_FALSE;
+
+	// try to interpolate from neighbors:
+	if (ctx->meshPosition.pass > 0)
+	{
+		float *neighbors[4];
+		int neighborCount = 0;
+		int d = ctx->meshPosition.pass < 4 ? 2 : 1;
+		int dirs = ctx->meshPosition.pass < 4 ? ctx->meshPosition.pass : ctx->meshPosition.pass - 3;
+		if (dirs & 1) // check x-neighbors with distance d
+		{
+			if (ctx->meshPosition.rasterizer.x - d >= ctx->meshPosition.rasterizer.minx &&
+				ctx->meshPosition.rasterizer.x + d < ctx->meshPosition.rasterizer.maxx)
+			{
+				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x - d, ctx->meshPosition.rasterizer.y);
+				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x + d, ctx->meshPosition.rasterizer.y);
+			}
+		}
+		if (dirs & 2) // check y-neighbors with distance d
+		{
+			if (ctx->meshPosition.rasterizer.y - d >= ctx->meshPosition.rasterizer.miny &&
+				ctx->meshPosition.rasterizer.y + d < ctx->meshPosition.rasterizer.maxy)
+			{
+				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y - d);
+				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y + d);
+			}
+		}
+		if ((dirs < 3 && neighborCount == 2) || neighborCount == 4) // are all interpolation neighbors available?
+		{
+			// calculate average neighbor pixel value
+			float avg[4] = { 0 };
+			for (int i = 0; i < neighborCount; i++)
+				for (int j = 0; j < ctx->lightmap.channels; j++)
+					avg[j] += neighbors[i][j];
+			float ni = 1.0f / neighborCount;
+			for (int j = 0; j < ctx->lightmap.channels; j++)
+				avg[j] *= ni;
+
+			// check if error from average pixel to neighbors is above the interpolation threshold
+			lm_bool interpolate = LM_TRUE;
+			for (int i = 0; i < neighborCount; i++)
+			{
+				lm_bool zero = LM_TRUE;
+				for (int j = 0; j < ctx->lightmap.channels; j++)
+				{
+					if (neighbors[i][j] != 0.0f)
+						zero = LM_FALSE;
+					if (fabs(neighbors[i][j] - avg[j]) > ctx->interpolationThreshold)
+						interpolate = LM_FALSE;
+				}
+				if (zero)
+					interpolate = LM_FALSE;
+				if (!interpolate)
+					break;
+			}
+
+			// set interpolated value and return if interpolation is acceptable
+			if (interpolate)
+			{
+				lm_setLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y, avg);
+#ifdef LM_DEBUG_INTERPOLATION
+				// set interpolated pixel to green in debug output
+				ctx->lightmap.debug[(ctx->meshPosition.rasterizer.y * ctx->lightmap.width + ctx->meshPosition.rasterizer.x) * 3 + 1] = 255;
+#endif
+				return LM_FALSE;
+			}
+		}
+	}
+
+	// could not interpolate. must render a hemisphere:
 	lm_vec2 pixel[16];
 	pixel[0] = lm_v2i(ctx->meshPosition.rasterizer.x    , ctx->meshPosition.rasterizer.y    );
 	pixel[1] = lm_v2i(ctx->meshPosition.rasterizer.x + 1, ctx->meshPosition.rasterizer.y    );
@@ -562,7 +674,7 @@ static void lm_finishProcessHemisphereBatch(lm_context *ctx)
 
 			lm_ivec2 lmUV = ctx->hemisphere.transfer.fbHemiToLightmapLocation[hy * ctx->hemisphere.fbHemiCountX + hx];
 			float *lm = ctx->lightmap.data + (lmUV.y * ctx->lightmap.width + lmUV.x) * ctx->lightmap.channels;
-			if (validity > 0.9)
+			if (!lm[0] && validity > 0.9)
 			{
 				float scale = 1.0f / validity;
 				switch (ctx->lightmap.channels)
@@ -589,11 +701,11 @@ static void lm_finishProcessHemisphereBatch(lm_context *ctx)
 					assert(LM_FALSE);
 					break;
 				}
-			}
-			else
-			{
-				for (int i = 0; i < ctx->lightmap.channels; i++)
-					lm[i] = 0.0f; // zero = not determined / not used
+
+#ifdef LM_DEBUG_INTERPOLATION
+				// set sampled pixel to red in debug output
+				ctx->lightmap.debug[(lmUV.y * ctx->lightmap.width + lmUV.x) * 3 + 0] = 255;
+#endif
 			}
 
 			if (++hemiIndex == ctx->hemisphere.transfer.fbHemiCount)
@@ -829,12 +941,14 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 	// calculate area of interest (on lightmap) for conservative rasterization
 	lm_vec2 bbMin = lm_floor2(uvMin);
 	lm_vec2 bbMax = lm_ceil2 (uvMax);
-	ctx->meshPosition.rasterizer.minx = ctx->meshPosition.rasterizer.x = lm_maxi((int)bbMin.x - 1, 0);
-	ctx->meshPosition.rasterizer.miny = ctx->meshPosition.rasterizer.y = lm_maxi((int)bbMin.y - 1, 0);
+	ctx->meshPosition.rasterizer.minx = lm_maxi((int)bbMin.x - 1, 0);
+	ctx->meshPosition.rasterizer.miny = lm_maxi((int)bbMin.y - 1, 0);
 	ctx->meshPosition.rasterizer.maxx = lm_mini((int)bbMax.x + 1, ctx->lightmap.width);
 	ctx->meshPosition.rasterizer.maxy = lm_mini((int)bbMax.y + 1, ctx->lightmap.height);
 	assert(ctx->meshPosition.rasterizer.minx < ctx->meshPosition.rasterizer.maxx &&
 		   ctx->meshPosition.rasterizer.miny < ctx->meshPosition.rasterizer.maxy);
+	ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX[ctx->meshPosition.pass];
+	ctx->meshPosition.rasterizer.y = ctx->meshPosition.rasterizer.miny + lm_passOffsetY[ctx->meshPosition.pass];
 
 	// try moving to first valid sample position
 	if (lm_findFirstConservativeTriangleRasterizerPosition(ctx))
@@ -914,10 +1028,12 @@ static float lm_defaultWeights(float cos_theta, void *userdata)
 }
 
 lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
-	float clearR, float clearG, float clearB)
+	float clearR, float clearG, float clearB,
+	float interpolationThreshold)
 {
 	lm_context *ctx = (lm_context*)LM_CALLOC(1, sizeof(lm_context));
 
+	ctx->interpolationThreshold = interpolationThreshold;
 	ctx->hemisphere.size = hemisphereSize;
 	ctx->hemisphere.zNear = zNear;
 	ctx->hemisphere.zFar = zFar;
@@ -1119,6 +1235,9 @@ void lmDestroy(lm_context *ctx)
 	// free memory
 	LM_FREE(ctx->hemisphere.transfer.fbHemiToLightmapLocation);
 	LM_FREE(ctx->hemisphere.fbHemiToLightmapLocation);
+#ifdef LM_DEBUG_INTERPOLATION
+	LM_FREE(ctx->lightmap.debug);
+#endif
 	LM_FREE(ctx);
 }
 
@@ -1175,6 +1294,12 @@ void lmSetTargetLightmap(lm_context *ctx, float *outLightmap, int w, int h, int 
 	ctx->lightmap.width = w;
 	ctx->lightmap.height = h;
 	ctx->lightmap.channels = c;
+
+#ifdef LM_DEBUG_INTERPOLATION
+	if (ctx->lightmap.debug)
+		LM_FREE(ctx->lightmap.debug);
+	ctx->lightmap.debug = (unsigned char*)LM_CALLOC(ctx->lightmap.width * ctx->lightmap.height, 3);
+#endif
 }
 
 void lmSetGeometry(lm_context *ctx,
@@ -1194,6 +1319,7 @@ void lmSetGeometry(lm_context *ctx,
 	ctx->mesh.indices = (const unsigned char*)indices;
 	ctx->mesh.count = count;
 
+	ctx->meshPosition.pass = 0;
 	lm_setMeshPosition(ctx, 0);
 }
 
@@ -1215,11 +1341,23 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 			}
 			else
 			{ // ...and there are no triangles left: finish
-				ctx->meshPosition.triangle.baseIndex = ctx->mesh.count; // set end condition (in case someone accidentally calls lmBegin again)
 				lm_finishProcessHemisphereBatch(ctx); // finish pending batch
 				lm_beginProcessHemisphereBatch(ctx); // start last batch, if there are unprocessed hemispheres
 				lm_finishProcessHemisphereBatch(ctx); // finish last batch
-				return LM_FALSE;
+
+				if (++ctx->meshPosition.pass == 7)
+				{
+					ctx->meshPosition.pass = 0;
+					ctx->meshPosition.triangle.baseIndex = ctx->mesh.count; // set end condition (in case someone accidentally calls lmBegin again)
+
+#ifdef LM_DEBUG_INTERPOLATION
+					lmImageSaveTGAub("debug_interpolation.tga", ctx->lightmap.debug, ctx->lightmap.width, ctx->lightmap.height, 3);
+#endif
+
+					return LM_FALSE;
+				}
+
+				lm_setMeshPosition(ctx, 0); // start over with the next pass
 			}
 		}
 	}

@@ -7,6 +7,7 @@
 #include "GLFW/glfw3.h"
 
 #define LIGHTMAPPER_IMPLEMENTATION
+#define LM_DEBUG_INTERPOLATION
 #include "../lightmapper.h"
 
 #ifndef M_PI // even with _USE_MATH_DEFINES not always available
@@ -40,7 +41,12 @@ static void destroyScene(scene_t *scene);
 
 static int bake(scene_t *scene)
 {
-	lm_context *ctx = lmCreate(32, 0.001f, 100.0f, 1.0f, 1.0f, 1.0f);
+	lm_context *ctx = lmCreate(
+		64,               // hemisphere resolution (power of two, max=512)
+		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
+		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
+		0.01f);           // lightmap interpolation threshold (small differences are interpolated rather than sampled)
+	                      // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 	if (!ctx)
 	{
 		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
