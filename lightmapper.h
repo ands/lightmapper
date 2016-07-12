@@ -78,8 +78,8 @@ lm_bool lmBegin(lm_context *ctx,
 	float* outView4x4,                                                                                 // output of the current camera view matrix.
 	float* outProjection4x4);                                                                          // output of the current camera projection matrix.
 
-int lmProgress(lm_context *ctx);                                                                       // should only be called between lmBegin/lmEnd!
-                                                                                                       // provides the currently processed triangle base index for the index/vertex array.
+float lmProgress(lm_context *ctx);                                                                     // should only be called between lmBegin/lmEnd!
+                                                                                                       // provides the light mapping progress as a value increasing from 0.0 to 1.0.
 
 void lmEnd(lm_context *ctx);
 
@@ -355,6 +355,7 @@ struct lm_context
 // 2 4 3 4 2
 // 5 6 5 6 5
 // 0 4 1 4 0
+#define LM_PASSES 7
 static const int lm_passOffsetX[] = { 0, 2, 0, 2, 1, 0, 1 };
 static const int lm_passOffsetY[] = { 0, 0, 2, 2, 0, 1, 1 };
 
@@ -385,7 +386,8 @@ static void lm_setLightmapPixel(lm_context *ctx, int x, int y, float *in)
 {
 	assert(x >= 0 && x < ctx->lightmap.width && y >= 0 && y < ctx->lightmap.height);
 	float *p = ctx->lightmap.data + (y * ctx->lightmap.width + x) * ctx->lightmap.channels;
-	memcpy(p, in, ctx->lightmap.channels * sizeof(float));
+	for (int j = 0; j < ctx->lightmap.channels; j++)
+		*p++ = *in++;
 }
 
 static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *ctx)
@@ -1345,7 +1347,7 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 				lm_beginProcessHemisphereBatch(ctx); // start last batch, if there are unprocessed hemispheres
 				lm_finishProcessHemisphereBatch(ctx); // finish last batch
 
-				if (++ctx->meshPosition.pass == 7)
+				if (++ctx->meshPosition.pass == LM_PASSES)
 				{
 					ctx->meshPosition.pass = 0;
 					ctx->meshPosition.triangle.baseIndex = ctx->mesh.count; // set end condition (in case someone accidentally calls lmBegin again)
@@ -1364,9 +1366,9 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 	return LM_TRUE;
 }
 
-int lmProgress(lm_context *ctx)
+float lmProgress(lm_context *ctx)
 {
-	return ctx->meshPosition.triangle.baseIndex;
+	return ((float)ctx->meshPosition.pass + (float)ctx->meshPosition.triangle.baseIndex / (float)ctx->mesh.count) / (float)LM_PASSES;
 }
 
 void lmEnd(lm_context *ctx)

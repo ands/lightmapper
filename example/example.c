@@ -76,7 +76,7 @@ static int bake(scene_t *scene)
 		if (time - lastUpdateTime > 1.0)
 		{
 			lastUpdateTime = time;
-			printf("\r%d/%d    ", lmProgress(ctx) / 3, scene->indexCount / 3);
+			printf("\r%6.2f%%", lmProgress(ctx) * 100.0f);
 			fflush(stdout);
 		}
 
