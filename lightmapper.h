@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 12.07.2016 *
+* author: Andreas Mantler (ands) | last change: 23.07.2016 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -49,11 +49,11 @@ lm_context *lmCreate(
 	int hemisphereSize,                                                                                // hemisphereSize: resolution of the hemisphere renderings. must be a power of two! typical: 64.
 	float zNear, float zFar,                                                                           // zNear/zFar: hemisphere min/max draw distances.
 	float clearR, float clearG, float clearB,                                                          // clear color / background color / sky color.
-	float interpolationThreshold);                                                                     // interpolationThreshold: error value below which lightmap pixels are interpolated instead of rendered.
+	int interpolationPasses, float interpolationThreshold);                                            // passes: hierarchical selective interpolation passes (0-8; initial step size = 2^passes).
+                                                                                                       // threshold: error value below which lightmap pixels are interpolated instead of rendered.
                                                                                                        // use output image from LM_DEBUG_INTERPOLATION to determine a good value.
                                                                                                        // values around and below 0.01 are probably ok.
                                                                                                        // the lower the value, the more hemispheres are rendered -> slower, but possibly better quality.
-                                                                                                       // a negative threshold value disables interpolation entirely.
 
 // optional: set material characteristics by specifying cos(theta)-dependent weights for incoming light.
 typedef float (*lm_weight_func)(float cos_theta, void *userdata);
@@ -271,6 +271,7 @@ struct lm_context
 	struct
 	{
 		int pass;
+		int passCount;
 
 		struct
 		{
@@ -349,15 +350,38 @@ struct lm_context
 	float interpolationThreshold;
 };
 
-// pass order for one 4x4 interpolation patch (and the next neighbors right of/below it)
+// pass order of one 4x4 interpolation patch for two interpolation steps (and the next neighbors right of/below it)
 // 0 4 1 4 0
 // 5 6 5 6 5
 // 2 4 3 4 2
 // 5 6 5 6 5
 // 0 4 1 4 0
-#define LM_PASSES 7
-static const int lm_passOffsetX[] = { 0, 2, 0, 2, 1, 0, 1 };
-static const int lm_passOffsetY[] = { 0, 0, 2, 2, 0, 1, 1 };
+
+static unsigned int lm_passStepSize(lm_context *ctx)
+{
+	unsigned int shift = ctx->meshPosition.passCount / 3 - (ctx->meshPosition.pass - 1) / 3;
+	unsigned int step = (1 << shift);
+	assert(step > 0);
+	return step;
+}
+
+static unsigned int lm_passOffsetX(lm_context *ctx)
+{
+	if (!ctx->meshPosition.pass)
+		return 0;
+	int passType = (ctx->meshPosition.pass - 1) % 3;
+	unsigned int halfStep = lm_passStepSize(ctx) >> 1;
+	return passType != 1 ? halfStep : 0;
+}
+
+static unsigned int lm_passOffsetY(lm_context *ctx)
+{
+	if (!ctx->meshPosition.pass)
+		return 0;
+	int passType = (ctx->meshPosition.pass - 1) % 3;
+	unsigned int halfStep = lm_passStepSize(ctx) >> 1;
+	return passType != 0 ? halfStep : 0;
+}
 
 static lm_bool lm_hasConservativeTriangleRasterizerFinished(lm_context *ctx)
 {
@@ -366,13 +390,14 @@ static lm_bool lm_hasConservativeTriangleRasterizerFinished(lm_context *ctx)
 
 static void lm_moveToNextPotentialConservativeTriangleRasterizerPosition(lm_context *ctx)
 {
-	// the first few passes work with 4x4 grids, while the later ones work with 2x2 grids
-	int inc = ctx->meshPosition.pass < 4 ? 4 : 2;
-	ctx->meshPosition.rasterizer.x += inc;
-	if (ctx->meshPosition.rasterizer.x >= ctx->meshPosition.rasterizer.maxx)
+	unsigned int step = lm_passStepSize(ctx);
+	ctx->meshPosition.rasterizer.x += step;
+	while (ctx->meshPosition.rasterizer.x >= ctx->meshPosition.rasterizer.maxx)
 	{
-		ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX[ctx->meshPosition.pass];
-		ctx->meshPosition.rasterizer.y += inc;
+		ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX(ctx);
+		ctx->meshPosition.rasterizer.y += step;
+		if (lm_hasConservativeTriangleRasterizerFinished(ctx))
+			break;
 	}
 }
 
@@ -406,12 +431,14 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 	{
 		float *neighbors[4];
 		int neighborCount = 0;
-		int d = ctx->meshPosition.pass < 4 ? 2 : 1;
-		int dirs = ctx->meshPosition.pass < 4 ? ctx->meshPosition.pass : ctx->meshPosition.pass - 3;
+		int neighborsExpected = 0;
+		unsigned int d = lm_passStepSize(ctx) / 2;
+		int dirs = ((ctx->meshPosition.pass - 1) % 3) + 1;
 		if (dirs & 1) // check x-neighbors with distance d
 		{
+			neighborsExpected += 2;
 			if (ctx->meshPosition.rasterizer.x - d >= ctx->meshPosition.rasterizer.minx &&
-				ctx->meshPosition.rasterizer.x + d < ctx->meshPosition.rasterizer.maxx)
+				ctx->meshPosition.rasterizer.x + d <  ctx->meshPosition.rasterizer.maxx)
 			{
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x - d, ctx->meshPosition.rasterizer.y);
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x + d, ctx->meshPosition.rasterizer.y);
@@ -419,14 +446,15 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		}
 		if (dirs & 2) // check y-neighbors with distance d
 		{
+			neighborsExpected += 2;
 			if (ctx->meshPosition.rasterizer.y - d >= ctx->meshPosition.rasterizer.miny &&
-				ctx->meshPosition.rasterizer.y + d < ctx->meshPosition.rasterizer.maxy)
+				ctx->meshPosition.rasterizer.y + d <  ctx->meshPosition.rasterizer.maxy)
 			{
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y - d);
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y + d);
 			}
 		}
-		if ((dirs < 3 && neighborCount == 2) || neighborCount == 4) // are all interpolation neighbors available?
+		if (neighborCount == neighborsExpected) // are all interpolation neighbors available?
 		{
 			// calculate average neighbor pixel value
 			float avg[4] = { 0 };
@@ -949,11 +977,13 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 	ctx->meshPosition.rasterizer.maxy = lm_mini((int)bbMax.y + 1, ctx->lightmap.height);
 	assert(ctx->meshPosition.rasterizer.minx < ctx->meshPosition.rasterizer.maxx &&
 		   ctx->meshPosition.rasterizer.miny < ctx->meshPosition.rasterizer.maxy);
-	ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX[ctx->meshPosition.pass];
-	ctx->meshPosition.rasterizer.y = ctx->meshPosition.rasterizer.miny + lm_passOffsetY[ctx->meshPosition.pass];
+	ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX(ctx);
+	ctx->meshPosition.rasterizer.y = ctx->meshPosition.rasterizer.miny + lm_passOffsetY(ctx);
 
 	// try moving to first valid sample position
-	if (lm_findFirstConservativeTriangleRasterizerPosition(ctx))
+	if (ctx->meshPosition.rasterizer.x <= ctx->meshPosition.rasterizer.maxx && 
+		ctx->meshPosition.rasterizer.y <= ctx->meshPosition.rasterizer.maxy &&
+		lm_findFirstConservativeTriangleRasterizerPosition(ctx))
 		ctx->meshPosition.hemisphere.side = 0; // we can start sampling the hemisphere
 	else
 		ctx->meshPosition.hemisphere.side = 5; // no samples on this triangle! put hemisphere sampler into finished state
@@ -1031,10 +1061,17 @@ static float lm_defaultWeights(float cos_theta, void *userdata)
 
 lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 	float clearR, float clearG, float clearB,
-	float interpolationThreshold)
+	int interpolationPasses, float interpolationThreshold)
 {
+	assert(hemisphereSize == 512 || hemisphereSize == 256 || hemisphereSize == 128 ||
+		   hemisphereSize ==  64 || hemisphereSize ==  32 || hemisphereSize ==  16);
+	assert(zNear < zFar && zNear > 0.0f);
+	assert(interpolationPasses >= 0 && interpolationPasses <= 8);
+	assert(interpolationThreshold >= 0.0f);
+
 	lm_context *ctx = (lm_context*)LM_CALLOC(1, sizeof(lm_context));
 
+	ctx->meshPosition.passCount = 1 + 3 * interpolationPasses;
 	ctx->interpolationThreshold = interpolationThreshold;
 	ctx->hemisphere.size = hemisphereSize;
 	ctx->hemisphere.zNear = zNear;
@@ -1347,13 +1384,36 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 				lm_beginProcessHemisphereBatch(ctx); // start last batch, if there are unprocessed hemispheres
 				lm_finishProcessHemisphereBatch(ctx); // finish last batch
 
-				if (++ctx->meshPosition.pass == LM_PASSES)
+				if (++ctx->meshPosition.pass == ctx->meshPosition.passCount)
 				{
 					ctx->meshPosition.pass = 0;
 					ctx->meshPosition.triangle.baseIndex = ctx->mesh.count; // set end condition (in case someone accidentally calls lmBegin again)
 
 #ifdef LM_DEBUG_INTERPOLATION
 					lmImageSaveTGAub("debug_interpolation.tga", ctx->lightmap.debug, ctx->lightmap.width, ctx->lightmap.height, 3);
+
+					// lightmap texel statistics
+					int rendered = 0, interpolated = 0, wasted = 0;
+					for (int y = 0; y < ctx->lightmap.height; y++)
+					{
+						for (int x = 0; x < ctx->lightmap.width; x++)
+						{
+							if (ctx->lightmap.debug[(y * ctx->lightmap.width + x) * 3 + 0])
+								rendered++;
+							else if (ctx->lightmap.debug[(y * ctx->lightmap.width + x) * 3 + 1])
+								interpolated++;
+							else
+								wasted++;
+						}
+					}
+					int used = rendered + interpolated;
+					int total = used + wasted;
+					printf("\n#######################################################################\n");
+					printf("%10d %6.2f%% rendered hemicubes integrated to lightmap texels.\n", rendered, 100.0f * (float)rendered / (float)total);
+					printf("%10d %6.2f%% interpolated lightmap texels.\n", interpolated, 100.0f * (float)interpolated / (float)total);
+					printf("%10d %6.2f%% wasted lightmap texels.\n", wasted, 100.0f * (float)wasted / (float)total);
+					printf("\n%17.2f%% of used texels were rendered.\n", 100.0f * (float)rendered / (float)used);
+					printf("#######################################################################\n");
 #endif
 
 					return LM_FALSE;
@@ -1368,7 +1428,8 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 
 float lmProgress(lm_context *ctx)
 {
-	return ((float)ctx->meshPosition.pass + (float)ctx->meshPosition.triangle.baseIndex / (float)ctx->mesh.count) / (float)LM_PASSES;
+	float passProgress = (float)ctx->meshPosition.triangle.baseIndex / (float)ctx->mesh.count;
+	return ((float)ctx->meshPosition.pass + passProgress) / (float)ctx->meshPosition.passCount;
 }
 
 void lmEnd(lm_context *ctx)

@@ -45,7 +45,7 @@ static int bake(scene_t *scene)
 		64,               // hemisphere resolution (power of two, max=512)
 		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
 		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
-		0.01f);           // lightmap interpolation threshold (small differences are interpolated rather than sampled)
+		2, 0.01f);        // lightmap interpolation threshold (small differences are interpolated rather than sampled)
 	                      // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 	if (!ctx)
 	{
