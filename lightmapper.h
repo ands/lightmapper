@@ -432,7 +432,7 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		float *neighbors[4];
 		int neighborCount = 0;
 		int neighborsExpected = 0;
-		unsigned int d = lm_passStepSize(ctx) / 2;
+		int d = (int)lm_passStepSize(ctx) / 2;
 		int dirs = ((ctx->meshPosition.pass - 1) % 3) + 1;
 		if (dirs & 1) // check x-neighbors with distance d
 		{
