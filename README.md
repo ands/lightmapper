@@ -99,7 +99,9 @@ If they are very low, very many lightmap texels get rendered, which is very expe
 On the example above this technique gives about a ~3.3x speedup without degrading the quality.
 Larger lightmaps can even get a ~10x speedup depending on the scene.
 This image shows which texels get rendered (red) and which get interpolated (green) in the above example:
+
 ![Interpolated texels](https://github.com/ands/lightmapper/raw/master/example_images/debug_interpolation.png)
+
 This technique is also described by Hugo Elias over [here](http://web.archive.org/web/20160311085440/http://freespace.virgin.net/hugo.elias/radiosity/radiosity.htm).
 
 # Example images
