@@ -10,14 +10,23 @@
 #define LM_DEBUG_INTERPOLATION
 #include "../lightmapper.h"
 
-#ifndef M_PI // even with _USE_MATH_DEFINES not always available
-#define M_PI 3.14159265358979323846
-#endif
+#define YO_IMPLEMENTATION
+#define YO_NOIMG
+#include "yocto_obj.h"
 
-typedef struct {
-	float p[3];
-	float t[2];
-} vertex_t;
+typedef struct
+{
+	GLuint vao, vbo, ibo;
+	int nindices;
+	int lightmapIndex;
+} gl_shape;
+
+typedef struct
+{
+	float *data;
+	GLuint texture;
+	int w, h;
+} gl_lightmap;
 
 typedef struct
 {
@@ -26,20 +35,23 @@ typedef struct
 	GLint u_projection;
 	GLint u_view;
 
-	GLuint lightmap;
-	int w, h;
+	gl_shape *shapes;
+	int nshapes;
+	gl_lightmap *lightmaps;
+	int nlightmaps;
+} gl_scene;
 
-	GLuint vao, vbo, ibo;
-	vertex_t *vertices;
-	unsigned short *indices;
-	unsigned int vertexCount, indexCount;
-} scene_t;
+typedef struct
+{
+	yo_scene *yo;
+	gl_scene *gl;
+} lm_scene;
 
-static int initScene(scene_t *scene);
-static void drawScene(scene_t *scene, float *view, float *projection);
-static void destroyScene(scene_t *scene);
+static int initScene(lm_scene *scene);
+static void drawScene(lm_scene *scene, float *view, float *projection);
+static void destroyScene(lm_scene *scene);
 
-static int bake(scene_t *scene)
+static int bake(lm_scene *scene)
 {
 	lm_context *ctx = lmCreate(
 		64,               // hemisphere resolution (power of two, max=512)
@@ -53,60 +65,79 @@ static int bake(scene_t *scene)
 		return 0;
 	}
 	
-	int w = scene->w, h = scene->h;
-	float *data = calloc(w * h * 4, sizeof(float));
-	lmSetTargetLightmap(ctx, data, w, h, 4);
-
-	lmSetGeometry(ctx, NULL,
-		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, p), sizeof(vertex_t),
-		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, t), sizeof(vertex_t),
-		scene->indexCount, LM_UNSIGNED_SHORT, scene->indices);
-
-	int vp[4];
-	float view[16], projection[16];
-	double lastUpdateTime = 0.0;
-	while (lmBegin(ctx, vp, view, projection))
+	for (int i = 0; i < scene->gl->nlightmaps; i++)
 	{
-		// render to lightmapper framebuffer
-		glViewport(vp[0], vp[1], vp[2], vp[3]);
-		drawScene(scene, view, projection);
+		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
+		float *data = glLightmap->data;
+		int w = glLightmap->w, h = glLightmap->h;
 
-		// display progress every second (printf is expensive)
-		double time = glfwGetTime();
-		if (time - lastUpdateTime > 1.0)
+		lmSetTargetLightmap(ctx, data, w, h, 4);
+
+		for (int j = 0; j < scene->yo->nshapes; j++)
 		{
-			lastUpdateTime = time;
-			printf("\r%6.2f%%", lmProgress(ctx) * 100.0f);
-			fflush(stdout);
+			yo_shape *yoShape = scene->yo->shapes + j;
+			if (yoShape->matid == i)
+			{
+				lmSetGeometry(ctx, NULL,
+					LM_FLOAT, (unsigned char*)yoShape->pos, 0,
+					LM_FLOAT, (unsigned char*)yoShape->texcoord, 0,
+					yoShape->nelems * 3, LM_UNSIGNED_INT, yoShape->elem);
+
+				int vp[4];
+				float view[16], projection[16];
+				double lastUpdateTime = 0.0;
+				while (lmBegin(ctx, vp, view, projection))
+				{
+					// render to lightmapper framebuffer
+					glViewport(vp[0], vp[1], vp[2], vp[3]);
+					drawScene(scene, view, projection);
+
+					// display progress every second (printf is expensive)
+					double time = glfwGetTime();
+					if (time - lastUpdateTime > 1.0)
+					{
+						lastUpdateTime = time;
+						printf("\r%6.2f%%", lmProgress(ctx) * 100.0f);
+						fflush(stdout);
+					}
+
+					lmEnd(ctx);
+				}
+				printf("\rFinished baking %d triangles.\n", yoShape->nelems);
+			}
 		}
-
-		lmEnd(ctx);
 	}
-	printf("\rFinished baking %d triangles.\n", scene->indexCount / 3);
-	
-	lmDestroy(ctx);
 
-	// postprocess texture
-	float *temp = calloc(w * h * 4, sizeof(float));
-	lmImageSmooth(data, temp, w, h, 4);
-	lmImageDilate(temp, data, w, h, 4);
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < scene->gl->nlightmaps; i++)
 	{
-		lmImageDilate(data, temp, w, h, 4);
+		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
+		float *data = glLightmap->data;
+		int w = glLightmap->w, h = glLightmap->h;
+
+		// postprocess texture
+		float *temp = calloc(w * h * 4, sizeof(float));
+		lmImageSmooth(data, temp, w, h, 4);
 		lmImageDilate(temp, data, w, h, 4);
+		for (int i = 0; i < 16; i++)
+		{
+			lmImageDilate(data, temp, w, h, 4);
+			lmImageDilate(temp, data, w, h, 4);
+		}
+		lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
+		free(temp);
+
+		// save result to a file
+		char filename[64];
+		sprintf(filename, "lightmap%03d.tga", i);
+		if (lmImageSaveTGAf(filename, data, w, h, 4, 1.0f))
+			printf("Saved %s\n", filename);
+	
+		// upload result
+		glBindTexture(GL_TEXTURE_2D, glLightmap->texture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
 	}
-	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
-	free(temp);
 
-	// save result to a file
-	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
-		printf("Saved result.tga\n");
-
-	// upload result
-	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
-	free(data);
-
+	lmDestroy(ctx);
 	return 1;
 }
 
@@ -140,7 +171,7 @@ int main(int argc, char* argv[])
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 	glfwSwapInterval(1);
 
-	scene_t scene = {0};
+	lm_scene scene = {0};
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
@@ -184,45 +215,76 @@ int main(int argc, char* argv[])
 }
 
 // helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
 static GLuint loadProgram(const char *vp, const char *fp, const char **attributes, int attributeCount);
 
-static int initScene(scene_t *scene)
+static int initScene(lm_scene *scene)
 {
-	// load mesh
-	if (!loadSimpleObjFile("gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
+	// load obj
+	scene->yo = yo_load_obj("gazebo.obj", true, false);
+	if (!scene->yo || !scene->yo->nshapes)
 	{
 		fprintf(stderr, "Error loading obj file\n");
 		return 0;
 	}
 
-	glGenVertexArrays(1, &scene->vao);
-	glBindVertexArray(scene->vao);
+	scene->gl = calloc(sizeof(gl_scene), 1);
+	scene->gl->shapes = calloc(sizeof(gl_shape), scene->yo->nshapes);
+	scene->gl->nshapes = scene->yo->nshapes;
+	scene->gl->lightmaps = calloc(sizeof(gl_lightmap), scene->yo->nmaterials);
+	scene->gl->nlightmaps = scene->yo->nmaterials;
 
-	glGenBuffers(1, &scene->vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, scene->vbo);
-	glBufferData(GL_ARRAY_BUFFER, scene->vertexCount * sizeof(vertex_t), scene->vertices, GL_STATIC_DRAW);
+	// upload geometry to opengl
+	for (int i = 0; i < scene->yo->nshapes; i++)
+	{
+		yo_shape *yoShape = scene->yo->shapes + i;
+		gl_shape *glShape = scene->gl->shapes + i;
 
-	glGenBuffers(1, &scene->ibo);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, scene->ibo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, scene->indexCount * sizeof(unsigned short), scene->indices, GL_STATIC_DRAW);
+		const size_t positionsSize = yoShape->nverts * 3 * sizeof(float);
+		const size_t texcoordsSize = yoShape->nverts * 2 * sizeof(float);
+		const size_t indicesSize   = yoShape->nelems * 3 * sizeof(int);
 
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, p));
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), (void*)offsetof(vertex_t, t));
+		glGenVertexArrays(1, &glShape->vao);
+		glBindVertexArray(glShape->vao);
 
-	// create lightmap texture
-	scene->w = 654;
-	scene->h = 654;
-	glGenTextures(1, &scene->lightmap);
-	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	unsigned char emissive[] = { 0, 0, 0, 255 };
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
+		glGenBuffers(1, &glShape->vbo);
+		glBindBuffer(GL_ARRAY_BUFFER, glShape->vbo);
+		glBufferData(GL_ARRAY_BUFFER, positionsSize + texcoordsSize, NULL, GL_STATIC_DRAW);
+		void *buffer = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+		memcpy(buffer                , yoShape->pos     , positionsSize);
+		memcpy(buffer + positionsSize, yoShape->texcoord, texcoordsSize);
+		glUnmapBuffer(GL_ARRAY_BUFFER);
+
+		glGenBuffers(1, &glShape->ibo);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glShape->ibo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indicesSize, yoShape->elem, GL_STATIC_DRAW);
+
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void*)positionsSize);
+
+		glShape->nindices = yoShape->nelems * 3;
+		glShape->lightmapIndex = yoShape->matid;
+	}
+
+	// create black lightmap textures
+	for (int i = 0; i < scene->yo->nmaterials; i++)
+	{
+		yo_material *material = scene->yo->materials + i;
+		gl_lightmap *lightmap = scene->gl->lightmaps + i;
+
+		lightmap->w = 1024;//654; // TODO: choose texture resolutions?
+		lightmap->h = 1024;//654;
+		lightmap->data = calloc(lightmap->w * lightmap->h * 4, sizeof(float));
+		glGenTextures(1, &lightmap->texture);
+		glBindTexture(GL_TEXTURE_2D, lightmap->texture);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		unsigned char emissive[] = { 0, 0, 0, 255 }; // black = no light emission
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
+	}
 
 	// load shader
 	const char *vp =
@@ -250,118 +312,64 @@ static int initScene(scene_t *scene)
 		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
 		"}\n";
 
-    const char *attribs[] =
-    {
-        "a_position",
-        "a_texcoord"
-    };
-    
-	scene->program = loadProgram(vp, fp, attribs, 2);
-	if (!scene->program)
+	const char *attribs[] =
+	{
+		"a_position",
+		"a_texcoord"
+	};
+
+	scene->gl->program = loadProgram(vp, fp, attribs, 2);
+	if (!scene->gl->program)
 	{
 		fprintf(stderr, "Error loading shader\n");
 		return 0;
 	}
-	scene->u_view = glGetUniformLocation(scene->program, "u_view");
-	scene->u_projection = glGetUniformLocation(scene->program, "u_projection");
-	scene->u_lightmap = glGetUniformLocation(scene->program, "u_lightmap");
+	scene->gl->u_view = glGetUniformLocation(scene->gl->program, "u_view");
+	scene->gl->u_projection = glGetUniformLocation(scene->gl->program, "u_projection");
+	scene->gl->u_lightmap = glGetUniformLocation(scene->gl->program, "u_lightmap");
 
 	return 1;
 }
 
-static void drawScene(scene_t *scene, float *view, float *projection)
+static void drawScene(lm_scene *scene, float *view, float *projection)
 {
 	glEnable(GL_DEPTH_TEST);
 
-	glUseProgram(scene->program);
-	glUniform1i(scene->u_lightmap, 0);
-	glUniformMatrix4fv(scene->u_projection, 1, GL_FALSE, projection);
-	glUniformMatrix4fv(scene->u_view, 1, GL_FALSE, view);
+	glUseProgram(scene->gl->program);
+	glUniform1i(scene->gl->u_lightmap, 0);
+	glUniformMatrix4fv(scene->gl->u_projection, 1, GL_FALSE, projection);
+	glUniformMatrix4fv(scene->gl->u_view, 1, GL_FALSE, view);
 
-	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
+	for (int i = 0; i < scene->gl->nshapes; i++)
+	{
+		gl_shape *glShape = scene->gl->shapes + i;
+		glBindTexture(GL_TEXTURE_2D, scene->gl->lightmaps[glShape->lightmapIndex].texture);
 
-	glBindVertexArray(scene->vao);
-	glDrawElements(GL_TRIANGLES, scene->indexCount, GL_UNSIGNED_SHORT, 0);
+		glBindVertexArray(glShape->vao);
+		glDrawElements(GL_TRIANGLES, glShape->nindices, GL_UNSIGNED_INT, 0);
+	}
 }
 
-static void destroyScene(scene_t *scene)
+static void destroyScene(lm_scene *scene)
 {
-	free(scene->vertices);
-	free(scene->indices);
-	glDeleteVertexArrays(1, &scene->vao);
-	glDeleteBuffers(1, &scene->vbo);
-	glDeleteBuffers(1, &scene->ibo);
-	glDeleteTextures(1, &scene->lightmap);
-	glDeleteProgram(scene->program);
-}
-
-static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount)
-{
-	FILE *file = fopen(filename, "rt");
-	if (!file)
-		return 0;
-	char line[1024];
-
-	// first pass
-	unsigned int np = 0, nn = 0, nt = 0, nf = 0;
-	while (!feof(file))
+	yo_free_scene(scene->yo);
+	for (int i = 0; i < scene->gl->nshapes; i++)
 	{
-		fgets(line, 1024, file);
-		if (line[0] == '#') continue;
-		if (line[0] == 'v')
-		{
-			if (line[1] == ' ') { np++; continue; }
-			if (line[1] == 'n') { nn++; continue; }
-			if (line[1] == 't') { nt++; continue; }
-			assert(!"unknown vertex attribute");
-		}
-		if (line[0] == 'f') { nf++; continue; }
-		assert(!"unknown identifier");
+		gl_shape *glShape = scene->gl->shapes + i;
+		glDeleteVertexArrays(1, &glShape->vao);
+		glDeleteBuffers(1, &glShape->vbo);
+		glDeleteBuffers(1, &glShape->ibo);
 	}
-	assert(np && np == nn && np == nt && nf); // only supports obj files without separately indexed vertex attributes
-
-	// allocate memory
-	*vertexCount = np;
-	*vertices = calloc(np, sizeof(vertex_t));
-	*indexCount = nf * 3;
-	*indices = calloc(nf * 3, sizeof(unsigned short));
-
-	// second pass
-	fseek(file, 0, SEEK_SET);
-	unsigned int cp = 0, cn = 0, ct = 0, cf = 0;
-	while (!feof(file))
+	for (int i = 0; i < scene->gl->nlightmaps; i++)
 	{
-		fgets(line, 1024, file);
-		if (line[0] == '#') continue;
-		if (line[0] == 'v')
-		{
-			if (line[1] == ' ') { float *p = (*vertices)[cp++].p; char *e1, *e2; p[0] = (float)strtod(line + 2, &e1); p[1] = (float)strtod(e1, &e2); p[2] = (float)strtod(e2, 0); continue; }
-			if (line[1] == 'n') { /*float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0);*/ continue; } // no normals needed
-			if (line[1] == 't') { float *t = (*vertices)[ct++].t; char *e1;      t[0] = (float)strtod(line + 3, &e1); t[1] = (float)strtod(e1, 0);                                continue; }
-			assert(!"unknown vertex attribute");
-		}
-		if (line[0] == 'f')
-		{
-			unsigned short *tri = (*indices) + cf;
-			cf += 3;
-			char *e1, *e2, *e3 = line + 1;
-			for (int i = 0; i < 3; i++)
-			{
-				unsigned long pi = strtoul(e3 + 1, &e1, 10);
-				assert(e1[0] == '/');
-				unsigned long ti = strtoul(e1 + 1, &e2, 10);
-				assert(e2[0] == '/');
-				unsigned long ni = strtoul(e2 + 1, &e3, 10);
-				assert(pi == ti && pi == ni);
-				tri[i] = (unsigned short)(pi - 1);
-			}
-			continue;
-		}
-		assert(!"unknown identifier");
+		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
+		free(glLightmap->data);
+		glDeleteTextures(1, &glLightmap->texture);
 	}
-
-	fclose(file);
-	return 1;
+	glDeleteProgram(scene->gl->program);
+	free(scene->gl->shapes);
+	free(scene->gl->lightmaps);
+	free(scene->gl);
 }
 
 static GLuint loadShader(GLenum type, const char *source)
@@ -440,6 +448,8 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 	return program;
 }
 
+#define LME_PI 3.14159265358979323846f
+
 static void multiplyMatrices(float *out, float *a, float *b)
 {
 	for (int y = 0; y < 4; y++)
@@ -455,7 +465,7 @@ static void translationMatrix(float *out, float x, float y, float z)
 }
 static void rotationMatrix(float *out, float angle, float x, float y, float z)
 {
-	angle *= (float)M_PI / 180.0f;
+	angle *= LME_PI / 180.0f;
 	float c = cosf(angle), s = sinf(angle), c2 = 1.0f - c;
 	out[ 0] = x*x*c2 + c;   out[ 1] = y*x*c2 + z*s; out[ 2] = x*z*c2 - y*s; out[ 3] = 0.0f;
 	out[ 4] = x*y*c2 - z*s; out[ 5] = y*y*c2 + c;   out[ 6] = y*z*c2 + x*s; out[ 7] = 0.0f;
@@ -478,7 +488,7 @@ static void transposeMatrix(float *out, float *m)
 }
 static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar)
 {
-	float f = 1.0f / tanf(fovy * (float)M_PI / 360.0f);
+	float f = 1.0f / tanf(fovy * LME_PI / 360.0f);
 	float izFN = 1.0f / (zNear - zFar);
 	out[ 0] = f / aspect; out[ 1] = 0.0f; out[ 2] = 0.0f;                       out[ 3] = 0.0f;
 	out[ 4] = 0.0f;       out[ 5] = f;    out[ 6] = 0.0f;                       out[ 7] = 0.0f;
