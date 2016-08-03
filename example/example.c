@@ -51,13 +51,47 @@ static int initScene(lm_scene *scene);
 static void drawScene(lm_scene *scene, float *view, float *projection);
 static void destroyScene(lm_scene *scene);
 
+typedef struct
+{
+	int baseIndex;
+	lm_vec2 transformedTriangle[3];
+	float height;
+} ta_entry;
+
+static int ta_entry_cmp(void *a, void *b)
+{
+	ta_entry *ea = (ta_entry*)a;
+	ta_entry *eb = (ta_entry*)b;
+	return ea->height - eb->height;
+}
+
+static void ta_pack(lm_vec3 *p, int count, int *indices, lm_vec2 *uv)
+{
+	ta_entry *entries = LM_MALLOC(count / 3 * sizeof(ta_entry));
+	for (int i = 0; i < count / 3; i++)
+	{
+		ta_entry *e = entries + i;
+		e->baseIndex = i * 3;
+
+		// find long edge and its rotation angle.
+
+		// rotate so that the long endge is at the top.
+		e->transformedTriangle = ...;
+
+		// measure the height = distance of the remaining point from long edge.
+		e->height = ...;
+	}
+	qsort(entries, count / 3, sizeof(ta_entry), ta_entry_cmp);
+	LM_FREE(entries);
+}
+
 static int bake(lm_scene *scene)
 {
 	lm_context *ctx = lmCreate(
 		64,               // hemisphere resolution (power of two, max=512)
-		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
+		0.0001f, 100.0f,  // zNear, zFar of hemisphere cameras
 		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
-		2, 0.01f);        // lightmap interpolation threshold (small differences are interpolated rather than sampled)
+		2, 0.01f);        // lightmap interpolation & threshold (small differences are interpolated rather than sampled)
 	                      // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 	if (!ctx)
 	{
@@ -65,12 +99,15 @@ static int bake(lm_scene *scene)
 		return 0;
 	}
 	
+	double bakeStart = glfwGetTime();
+
 	for (int i = 0; i < scene->gl->nlightmaps; i++)
 	{
 		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
 		float *data = glLightmap->data;
 		int w = glLightmap->w, h = glLightmap->h;
 
+		memset(data, 0, sizeof(float) * w * h * 4); // clear lightmap before rendering to it.
 		lmSetTargetLightmap(ctx, data, w, h, 4);
 
 		for (int j = 0; j < scene->yo->nshapes; j++)
@@ -79,8 +116,8 @@ static int bake(lm_scene *scene)
 			if (yoShape->matid == i)
 			{
 				lmSetGeometry(ctx, NULL,
-					LM_FLOAT, (unsigned char*)yoShape->pos, 0,
-					LM_FLOAT, (unsigned char*)yoShape->texcoord, 0,
+					LM_FLOAT, yoShape->pos, 0,
+					LM_FLOAT, yoShape->texcoord, 0,
 					yoShape->nelems * 3, LM_UNSIGNED_INT, yoShape->elem);
 
 				int vp[4];
@@ -107,6 +144,8 @@ static int bake(lm_scene *scene)
 			}
 		}
 	}
+
+	printf("Baking took %.1fs.\n", (float)(glfwGetTime() - bakeStart));
 
 	for (int i = 0; i < scene->gl->nlightmaps; i++)
 	{
@@ -249,7 +288,8 @@ static int initScene(lm_scene *scene)
 		glGenBuffers(1, &glShape->vbo);
 		glBindBuffer(GL_ARRAY_BUFFER, glShape->vbo);
 		glBufferData(GL_ARRAY_BUFFER, positionsSize + texcoordsSize, NULL, GL_STATIC_DRAW);
-		void *buffer = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+		unsigned char *buffer = (unsigned char*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+		assert(buffer);
 		memcpy(buffer                , yoShape->pos     , positionsSize);
 		memcpy(buffer + positionsSize, yoShape->texcoord, texcoordsSize);
 		glUnmapBuffer(GL_ARRAY_BUFFER);

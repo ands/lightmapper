@@ -680,7 +680,7 @@ yo__add_env(yo_scene* scene, const char* name, const char* matname,
 // parses one float
 static inline float
 yo__parse_float(char** tok) {
-    return atof(tok[0]);
+    return (float)atof(tok[0]);
 }
 
 // parses two floats

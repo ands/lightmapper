@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 23.07.2016 *
+* author: Andreas Mantler (ands) | last change: 01.08.2016 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -133,6 +133,7 @@ static inline int      lm_absi      (int     a           ) { return a < 0 ? -a :
 static inline float    lm_minf      (float   a, float   b) { return a < b ? a : b; }
 static inline float    lm_maxf      (float   a, float   b) { return a > b ? a : b; }
 static inline float    lm_absf      (float   a           ) { return a < 0.0f ? -a : a; }
+static inline float    lm_pmodf     (float   a, float   b) { return (a < 0.0f ? 1.0f : 0.0f) + fmod(a, b); } // positive mod
 
 typedef struct lm_ivec2 { int x, y; } lm_ivec2;
 static inline lm_ivec2 lm_i2        (int     x, int     y) { lm_ivec2 v = { x, y }; return v; }
@@ -146,6 +147,7 @@ static inline lm_vec2  lm_sub2      (lm_vec2 a, lm_vec2 b) { return lm_v2(a.x - 
 static inline lm_vec2  lm_mul2      (lm_vec2 a, lm_vec2 b) { return lm_v2(a.x * b.x, a.y * b.y); }
 static inline lm_vec2  lm_scale2    (lm_vec2 a, float   b) { return lm_v2(a.x * b, a.y * b); }
 static inline lm_vec2  lm_div2      (lm_vec2 a, float   b) { return lm_scale2(a, 1.0f / b); }
+static inline lm_vec2  lm_pmod2     (lm_vec2 a, float   b) { return lm_v2(lm_pmodf(a.x, b), lm_pmodf(a.y, b)); }
 static inline lm_vec2  lm_min2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_minf(a.x, b.x), lm_minf(a.y, b.y)); }
 static inline lm_vec2  lm_max2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y)); }
 static inline lm_vec2  lm_floor2    (lm_vec2 a           ) { return lm_v2(floorf(a.x), floorf(a.y)); }
@@ -165,6 +167,7 @@ static inline lm_vec3  lm_sub3      (lm_vec3 a, lm_vec3 b) { return lm_v3(a.x - 
 static inline lm_vec3  lm_mul3      (lm_vec3 a, lm_vec3 b) { return lm_v3(a.x * b.x, a.y * b.y, a.z * b.z); }
 static inline lm_vec3  lm_scale3    (lm_vec3 a, float   b) { return lm_v3(a.x * b, a.y * b, a.z * b); }
 static inline lm_vec3  lm_div3      (lm_vec3 a, float   b) { return lm_scale3(a, 1.0f / b); }
+static inline lm_vec3  lm_pmod3     (lm_vec3 a, float   b) { return lm_v3(lm_pmodf(a.x, b), lm_pmodf(a.y, b), lm_pmodf(a.z, b)); }
 static inline lm_vec3  lm_min3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_minf(a.x, b.x), lm_minf(a.y, b.y), lm_minf(a.z, b.z)); }
 static inline lm_vec3  lm_max3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y), lm_maxf(a.z, b.z)); }
 static inline lm_vec3  lm_floor3    (lm_vec3 a           ) { return lm_v3(floorf(a.x), floorf(a.y), floorf(a.z)); }
@@ -961,7 +964,8 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 			assert(LM_FALSE);
 		} break;
 		}
-		ctx->meshPosition.triangle.uv[i] = lm_mul2(uv, uvScale);
+
+		ctx->meshPosition.triangle.uv[i] = lm_mul2(lm_pmod2(uv, 1.0f), uvScale); // maybe clamp to 0.0-1.0 instead of pmod?
 
 		// update bounds on lightmap
 		uvMin = lm_min2(uvMin, ctx->meshPosition.triangle.uv[i]);
