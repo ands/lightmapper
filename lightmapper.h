@@ -133,7 +133,7 @@ static inline int      lm_absi      (int     a           ) { return a < 0 ? -a :
 static inline float    lm_minf      (float   a, float   b) { return a < b ? a : b; }
 static inline float    lm_maxf      (float   a, float   b) { return a > b ? a : b; }
 static inline float    lm_absf      (float   a           ) { return a < 0.0f ? -a : a; }
-static inline float    lm_pmodf     (float   a, float   b) { return (a < 0.0f ? 1.0f : 0.0f) + fmod(a, b); } // positive mod
+static inline float    lm_pmodf     (float   a, float   b) { return (a < 0.0f ? 1.0f : 0.0f) + (float)fmod(a, b); } // positive mod
 
 typedef struct lm_ivec2 { int x, y; } lm_ivec2;
 static inline lm_ivec2 lm_i2        (int     x, int     y) { lm_ivec2 v = { x, y }; return v; }

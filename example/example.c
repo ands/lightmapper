@@ -35,6 +35,9 @@ static int initScene(lm_scene *scene);
 static void drawScene(lm_scene *scene, float *view, float *projection);
 static void destroyScene(lm_scene *scene);
 
+
+#define TA_DEBUG
+
 typedef struct
 {
 	int Aindex;
@@ -56,6 +59,7 @@ static int ta_entry_cmp(const void *a, const void *b)
 	return dh != 0 ? dh : dw;
 }
 
+#ifdef TA_DEBUG
 static void ta_line(unsigned char *data, int w, int h,
                     int x0, int y0, int x1, int y1,
                     unsigned char r, unsigned char g, unsigned char b)
@@ -74,6 +78,7 @@ static void ta_line(unsigned char *data, int w, int h,
 		if (e2 <  dy) { err += dx; y0 += sy; }
 	}
 }
+#endif
 
 static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
 {
@@ -118,8 +123,13 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	ta_entry *entries = LM_CALLOC(count / 3, sizeof(ta_entry));
 	for (int i = 0; i < count / 3; i++)
 	{
-		lm_vec3 tp[3] = { lm_scale3(p[i * 3 + 0], scale), lm_scale3(p[i * 3 + 1], scale), lm_scale3(p[i * 3 + 2], scale) };
-		lm_vec3 tv[3] = { lm_sub3(tp[1], tp[0]), lm_sub3(tp[2], tp[1]), lm_sub3(tp[0], tp[2]) };
+		lm_vec3 tp[3], tv[3];
+		tp[0] = lm_scale3(p[i * 3 + 0], scale);
+		tp[1] = lm_scale3(p[i * 3 + 1], scale);
+		tp[2] = lm_scale3(p[i * 3 + 2], scale);
+		tv[0] = lm_sub3(tp[1], tp[0]);
+		tv[1] = lm_sub3(tp[2], tp[1]);
+		tv[2] = lm_sub3(tp[0], tp[2]);
 		float tvlsq[3] = { lm_length3sq(tv[0]), lm_length3sq(tv[1]), lm_length3sq(tv[2]) };
 		
 		// find long edge
@@ -144,7 +154,10 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	qsort(entries, count / 3, sizeof(ta_entry), ta_entry_cmp);
 	
 	lm_vec2 uvScale = lm_v2(1.0f / width, 1.0f / height);
+
+#ifdef TA_DEBUG
 	unsigned char *data = LM_CALLOC(width * height, 3);
+#endif
 	
 	int y = spacing;
 	int ch = entries[0].h;
@@ -182,12 +195,14 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 				if (y + e->h + spacing > height)
 					break;
 			}
-			prevSlopeSpacing = 2 * (int)ceilf((e->w - e->x) / (float)e->h);
+			prevSlopeSpacing = 4 * (int)ceilf((e->w - e->x) / (float)e->h);
 			ta_wave_surge(wave, x + e->x + spacing + 1, yf, x + e->w + spacing + 1, yf + e->h);
 
-			ta_line(data, width, height, x       , yf + e->h, x + e->w, yf + e->h, 255, 0, 0);
-			ta_line(data, width, height, x       , yf + e->h, x + e->x, yf       , 0, 255, 0);
-			ta_line(data, width, height, x + e->x, yf       , x + e->w, yf + e->h, 0, 0, 255);
+#ifdef TA_DEBUG
+			ta_line(data, width, height, x       , yf + e->h, x + e->w, yf + e->h, 255, 255, 255);
+			ta_line(data, width, height, x       , yf + e->h, x + e->x, yf       , 255, 255, 255);
+			ta_line(data, width, height, x + e->x, yf       , x + e->w, yf + e->h, 255, 255, 255);
+#endif
 			
 			// calc & store UVs
 			int tri = e->Aindex - (e->Aindex % 3);
@@ -195,13 +210,9 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 			int Bi = tri + ((e->Aindex + 1) % 3);
 			int Ci = tri + ((e->Aindex + 2) % 3);
 			if (e->hflip) LM_SWAP(int, Ai, Bi);
-			uv[Ai] = lm_mul2(lm_v2(x + e->w, yf + e->h), uvScale);
-			uv[Bi] = lm_mul2(lm_v2(x       , yf + e->h), uvScale);
-			uv[Ci] = lm_mul2(lm_v2(x + e->x, yf       ), uvScale);
-			//printf("%d: %.2f %.2f; %d: %.2f %.2f; %d: %.2f %.2f\n",
-			//	Ai, uv[Ai].x, uv[Ai].y,
-			//	Bi, uv[Bi].x, uv[Bi].y,
-			//	Ci, uv[Ci].x, uv[Ci].y);
+			uv[Ai] = lm_mul2(lm_v2i(x + e->w, yf + e->h), uvScale);
+			uv[Bi] = lm_mul2(lm_v2i(x       , yf + e->h), uvScale);
+			uv[Ci] = lm_mul2(lm_v2i(x + e->x, yf       ), uvScale);
 		}
 		else
 		{
@@ -226,12 +237,14 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 				if (y + e->h + spacing > height)
 					break;
 			}
-			prevSlopeSpacing = 2 * (int)ceilf((e->w - e->x) / (float)e->h);
+			prevSlopeSpacing = 4 * (int)ceilf((e->w - e->x) / (float)e->h);
 			ta_wave_surge(wave, x + e->x + spacing + 1, y + e->h, x + e->w + spacing + 1, y);
 
-			ta_line(data, width, height, x       , y       , x + e->w, y       , 255, 0, 0);
-			ta_line(data, width, height, x       , y       , x + e->x, y + e->h, 0, 255, 0);
-			ta_line(data, width, height, x + e->x, y + e->h, x + e->w, y       , 0, 0, 255);
+#ifdef TA_DEBUG
+			ta_line(data, width, height, x       , y       , x + e->w, y       , 255, 255, 255);
+			ta_line(data, width, height, x       , y       , x + e->x, y + e->h, 255, 255, 255);
+			ta_line(data, width, height, x + e->x, y + e->h, x + e->w, y       , 255, 255, 255);
+#endif
 			
 			// calc & store UVs
 			int tri = e->Aindex - (e->Aindex % 3);
@@ -239,35 +252,56 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 			int Bi = tri + ((e->Aindex + 1) % 3);
 			int Ci = tri + ((e->Aindex + 2) % 3);
 			if (e->hflip) LM_SWAP(int, Ai, Bi);
-			uv[Ai] = lm_mul2(lm_v2(x + e->w, y       ), uvScale);
-			uv[Bi] = lm_mul2(lm_v2(x       , y       ), uvScale);
-			uv[Ci] = lm_mul2(lm_v2(x + e->x, y + e->h), uvScale);
-			//printf("%d: %.2f %.2f; %d: %.2f %.2f; %d: %.2f %.2f\n",
-			//	Ai, uv[Ai].x, uv[Ai].y,
-			//	Bi, uv[Bi].x, uv[Bi].y,
-			//	Ci, uv[Ci].x, uv[Ci].y);
+			uv[Ai] = lm_mul2(lm_v2i(x + e->w, y       ), uvScale);
+			uv[Bi] = lm_mul2(lm_v2i(x       , y       ), uvScale);
+			uv[Ci] = lm_mul2(lm_v2i(x + e->x, y + e->h), uvScale);
 		}
 		flipped = !flipped;
 	}
-	LM_FREE(wave);
 
-	char *filename = "packing.tga";
-	if (lmImageSaveTGAub(filename, data, width, height, 3))
-		printf("Saved %s\n", filename);
+#ifdef TA_DEBUG
+	for (int i = 0; i < height; i++)
+	{
+		int x = wave[i] - spacing;
+		while (x < width)
+			data[(i * width + x++) * 3] = 255;
+	}
+	if (lmImageSaveTGAub("debug_triangle_packing.tga", data, width, height, 3))
+		printf("Saved debug_triangle_packing.tga\n");
 	LM_FREE(data);
+#endif
+
+	LM_FREE(wave);
 	LM_FREE(entries);
 	
 	return processed * 3;
 }
 
+static void injectDirectLighting(lm_scene *scene)
+{
+	for (int i = 800; i < 1200; i++)
+	{
+		for (int j = 400; j < 800; j++)
+		{
+			scene->data[(i * scene->w + j) * 4 + 0] = 0.0f;
+			scene->data[(i * scene->w + j) * 4 + 1] = 0.5f;
+			scene->data[(i * scene->w + j) * 4 + 2] = 1.0f;
+			scene->data[(i * scene->w + j) * 4 + 3] = 1.0f;
+		}
+	}
+}
+
+static float sky[] = { 1.0f, 0.8f, 0.3f };
+static float bakeScale = 0.01f;
+
 static int bake(lm_scene *scene)
 {
 	lm_context *ctx = lmCreate(
-		64,               // hemisphere resolution (power of two, max=512)
-		0.0001f, 100.0f,  // zNear, zFar of hemisphere cameras
-		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
-		2, 0.01f);        // lightmap interpolation & threshold (small differences are interpolated rather than sampled)
-	                      // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
+		256,                    // hemisphere resolution (power of two, max=512)
+		0.0001f, 100.0f,        // zNear, zFar of hemisphere cameras
+		bakeScale * sky[0], bakeScale * sky[1], bakeScale * sky[2], // background color (white for ambient occlusion)
+		2, 0.01f);              // lightmap interpolation & threshold (small differences are interpolated rather than sampled)
+	                            // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 	if (!ctx)
 	{
 		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
@@ -321,6 +355,8 @@ static int bake(lm_scene *scene)
 	}
 	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
 	free(temp);
+
+	injectDirectLighting(scene);
 
 	// save result to a file
 	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
@@ -394,7 +430,7 @@ int main(int argc, char* argv[])
 		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
 		
 		// draw to screen with a blueish sky
-		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
+		glClearColor(sky[0], sky[1], sky[2], 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		drawScene(&scene, view, projection);
 
@@ -413,7 +449,7 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 static int initScene(lm_scene *scene)
 {
 	// load obj
-	yo_scene *yo = yo_load_obj("gazebo.obj", true, false);
+	yo_scene *yo = yo_load_obj("city.obj", true, false);
 	if (!yo || !yo->nshapes)
 	{
 		fprintf(stderr, "Error loading obj file\n");
@@ -440,9 +476,9 @@ static int initScene(lm_scene *scene)
 	yo_free_scene(yo);
 	
 	// create lightmap texture atlas
-	scene->w = 1024;
-	scene->h = 1024;
-	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 380.0f, scene->texcoords);
+	scene->w = 2048;
+	scene->h = 2048;
+	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 309.0f/*144.0f/*375.0f*/, scene->texcoords);
 	if (processed < scene->vertices)
 	{
 		fprintf(stderr, "Could not pack all triangles into the lightmap! (%d/%d)\n", processed / 3, scene->vertices / 3);
@@ -469,14 +505,15 @@ static int initScene(lm_scene *scene)
 
 	// create black lightmap textures
 	scene->data = calloc(scene->w * scene->h * 4, sizeof(float));
+	injectDirectLighting(scene);
+
 	glGenTextures(1, &scene->texture);
 	glBindTexture(GL_TEXTURE_2D, scene->texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	unsigned char emissive[] = { 0, 0, 0, 255 }; // black = no light emission
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, scene->w, scene->h, 0, GL_RGBA, GL_FLOAT, scene->data);
 
 	// load shader
 	const char *vp =
