@@ -16,35 +16,19 @@
 
 typedef struct
 {
-	GLuint vao, vbo, ibo;
-	int nindices;
-	int lightmapIndex;
-} gl_shape;
-
-typedef struct
-{
-	float *data;
-	GLuint texture;
-	int w, h;
-} gl_lightmap;
-
-typedef struct
-{
 	GLuint program;
 	GLint u_lightmap;
 	GLint u_projection;
 	GLint u_view;
+	GLuint vao, vbo;
 
-	gl_shape *shapes;
-	int nshapes;
-	gl_lightmap *lightmaps;
-	int nlightmaps;
-} gl_scene;
+	lm_vec3 *positions;
+	lm_vec2 *texcoords;
+	int vertices;
 
-typedef struct
-{
-	yo_scene *yo;
-	gl_scene *gl;
+	float *data;
+	GLuint texture;
+	int w, h;
 } lm_scene;
 
 static int initScene(lm_scene *scene);
@@ -53,36 +37,227 @@ static void destroyScene(lm_scene *scene);
 
 typedef struct
 {
-	int baseIndex;
-	lm_vec2 transformedTriangle[3];
-	float height;
+	int Aindex;
+	short w, x, h, hflip;
+	//       C           -
+	//     * |  *        | h
+	//   *   |     *     |
+	// B-----+--------A  -
+	// '--x--'
+	// '-------w------'
 } ta_entry;
 
-static int ta_entry_cmp(void *a, void *b)
+static int ta_entry_cmp(const void *a, const void *b)
 {
 	ta_entry *ea = (ta_entry*)a;
 	ta_entry *eb = (ta_entry*)b;
-	return ea->height - eb->height;
+	int dh = eb->h - ea->h;
+	int dw = eb->w - ea->w;
+	return dh != 0 ? dh : dw;
 }
 
-static void ta_pack(lm_vec3 *p, int count, int *indices, lm_vec2 *uv)
+static void ta_line(unsigned char *data, int w, int h,
+                    int x0, int y0, int x1, int y1,
+                    unsigned char r, unsigned char g, unsigned char b)
 {
-	ta_entry *entries = LM_MALLOC(count / 3 * sizeof(ta_entry));
+	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
+	int err = (dx > dy ? dx : -dy) / 2, e2;
+	for(;;)
+	{
+		unsigned char *p = data + (y0 * w + x0) * 3;
+		p[0] = r; p[1] = g; p[2] = b;
+
+		if (x0 == x1 && y0 == y1) break;
+		e2 = err;
+		if (e2 > -dx) { err -= dy; x0 += sx; }
+		if (e2 <  dy) { err += dx; y0 += sy; }
+	}
+}
+
+static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
+{
+	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
+	int err = (dx > dy ? dx : -dy) / 2, e2;
+	for(;;)
+	{
+		wave[y0] = x0;
+		if (x0 == x1 && y0 == y1) break;
+		e2 = err;
+		if (e2 > -dx) { err -= dy; x0 += sx; }
+		if (e2 <  dy) { err += dx; y0 += sy; }
+	}
+}
+
+static int ta_wave_wash_up(int *wave, int y0, int x1, int y1, int *ySupport)
+{
+	int x0 = 0;
+	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
+	int err = (dx > dy ? dx : -dy) / 2, e2;
+	int x = 0;
+	for(;;)
+	{
+		int xDistance = wave[y0] - x0 - x;
+		if (xDistance >= 0)
+		{
+			*ySupport = y0;
+			x += xDistance;
+		}
+		if (x0 == x1 && y0 == y1) break;
+		e2 = err;
+		if (e2 > -dx) { err -= dy; x0 += sx; }
+		if (e2 <  dy) { err += dx; y0 += sy; }
+	}
+	return x;
+}
+
+static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, float scale, lm_vec2 *uv)
+{
+	ta_entry *entries = LM_CALLOC(count / 3, sizeof(ta_entry));
 	for (int i = 0; i < count / 3; i++)
 	{
+		lm_vec3 tp[3] = { lm_scale3(p[i * 3 + 0], scale), lm_scale3(p[i * 3 + 1], scale), lm_scale3(p[i * 3 + 2], scale) };
+		lm_vec3 tv[3] = { lm_sub3(tp[1], tp[0]), lm_sub3(tp[2], tp[1]), lm_sub3(tp[0], tp[2]) };
+		float tvlsq[3] = { lm_length3sq(tv[0]), lm_length3sq(tv[1]), lm_length3sq(tv[2]) };
+		
+		// find long edge
+		int maxi;        float maxl = tvlsq[0]; maxi = 0;
+		if (tvlsq[1] > maxl) { maxl = tvlsq[1]; maxi = 1; }
+		if (tvlsq[2] > maxl) { maxl = tvlsq[2]; maxi = 2; }
+		int nexti = (maxi + 1) % 3;
+		
+		// measure triangle
+		float w = sqrtf(maxl);
+		float x = -lm_dot3(tv[maxi], tv[nexti]) / w;
+		float h = lm_length3(lm_sub3(lm_add3(tv[maxi], tv[nexti]), lm_scale3(lm_normalize3(tv[maxi]), w - x)));
+
+		// store entry
 		ta_entry *e = entries + i;
-		e->baseIndex = i * 3;
-
-		// find long edge and its rotation angle.
-
-		// rotate so that the long endge is at the top.
-		e->transformedTriangle = ...;
-
-		// measure the height = distance of the remaining point from long edge.
-		e->height = ...;
+		e->Aindex = i * 3 + maxi;
+		e->w = (int)ceilf(w);
+		e->x = (int)ceilf(x);
+		e->h = (int)ceilf(h);
+		e->hflip = 0;
 	}
 	qsort(entries, count / 3, sizeof(ta_entry), ta_entry_cmp);
+	
+	lm_vec2 uvScale = lm_v2(1.0f / width, 1.0f / height);
+	unsigned char *data = LM_CALLOC(width * height, 3);
+	
+	int y = spacing;
+	int ch = entries[0].h;
+	int processed;
+	bool flipped = false;
+	int *wave = LM_CALLOC(height, sizeof(int));
+	for (int i = 0; i < height; i++)
+		wave[i] = spacing;
+	int prevSlopeSpacing = 0;
+	for (processed = 0; processed < count / 3; processed++)
+	{
+		ta_entry *e = entries + processed;
+		if (flipped)
+		{
+			int yf = y + ch - e->h;
+			int ySupport = 0;
+			int x      = ta_wave_wash_up(wave, yf + e->h, e->x       , yf, &ySupport);
+			int xHflip = ta_wave_wash_up(wave, yf + e->h, e->w - e->x, yf, &ySupport);
+			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
+			{
+				x = xHflip;
+				e->hflip = 1;
+				e->x = e->w - e->x;
+			}
+			if (ySupport == yf)
+				x += e->h == ch ? 0 : prevSlopeSpacing;
+			else if (ySupport < yf + e->h)
+				x += 2 * (int)ceilf(e->x / (float)e->h);
+			if (x + e->w + spacing > width)
+			{
+				x = spacing;
+				y += ch + spacing + 1;
+				yf = y;
+				ch = e->h;
+				if (y + e->h + spacing > height)
+					break;
+			}
+			prevSlopeSpacing = 2 * (int)ceilf((e->w - e->x) / (float)e->h);
+			ta_wave_surge(wave, x + e->x + spacing + 1, yf, x + e->w + spacing + 1, yf + e->h);
+
+			ta_line(data, width, height, x       , yf + e->h, x + e->w, yf + e->h, 255, 0, 0);
+			ta_line(data, width, height, x       , yf + e->h, x + e->x, yf       , 0, 255, 0);
+			ta_line(data, width, height, x + e->x, yf       , x + e->w, yf + e->h, 0, 0, 255);
+			
+			// calc & store UVs
+			int tri = e->Aindex - (e->Aindex % 3);
+			int Ai = e->Aindex;
+			int Bi = tri + ((e->Aindex + 1) % 3);
+			int Ci = tri + ((e->Aindex + 2) % 3);
+			if (e->hflip) LM_SWAP(int, Ai, Bi);
+			uv[Ai] = lm_mul2(lm_v2(x + e->w, yf + e->h), uvScale);
+			uv[Bi] = lm_mul2(lm_v2(x       , yf + e->h), uvScale);
+			uv[Ci] = lm_mul2(lm_v2(x + e->x, yf       ), uvScale);
+			//printf("%d: %.2f %.2f; %d: %.2f %.2f; %d: %.2f %.2f\n",
+			//	Ai, uv[Ai].x, uv[Ai].y,
+			//	Bi, uv[Bi].x, uv[Bi].y,
+			//	Ci, uv[Ci].x, uv[Ci].y);
+		}
+		else
+		{
+			int ySupport = 0;
+			int x      = ta_wave_wash_up(wave, y, e->x       , y + e->h, &ySupport);
+			int xHflip = ta_wave_wash_up(wave, y, e->w - e->x, y + e->h, &ySupport);
+			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
+			{
+				x = xHflip;
+				e->hflip = 1;
+				e->x = e->w - e->x;
+			}
+			if (ySupport == y + e->h)
+				x += e->h == ch ? 0 : prevSlopeSpacing;
+			else if (ySupport > y)
+				x += 2 * (int)ceilf(e->x / (float)e->h);
+			if (x + e->w + spacing > width)
+			{
+				x = spacing;
+				y += ch + spacing + 1;
+				ch = e->h;
+				if (y + e->h + spacing > height)
+					break;
+			}
+			prevSlopeSpacing = 2 * (int)ceilf((e->w - e->x) / (float)e->h);
+			ta_wave_surge(wave, x + e->x + spacing + 1, y + e->h, x + e->w + spacing + 1, y);
+
+			ta_line(data, width, height, x       , y       , x + e->w, y       , 255, 0, 0);
+			ta_line(data, width, height, x       , y       , x + e->x, y + e->h, 0, 255, 0);
+			ta_line(data, width, height, x + e->x, y + e->h, x + e->w, y       , 0, 0, 255);
+			
+			// calc & store UVs
+			int tri = e->Aindex - (e->Aindex % 3);
+			int Ai = e->Aindex;
+			int Bi = tri + ((e->Aindex + 1) % 3);
+			int Ci = tri + ((e->Aindex + 2) % 3);
+			if (e->hflip) LM_SWAP(int, Ai, Bi);
+			uv[Ai] = lm_mul2(lm_v2(x + e->w, y       ), uvScale);
+			uv[Bi] = lm_mul2(lm_v2(x       , y       ), uvScale);
+			uv[Ci] = lm_mul2(lm_v2(x + e->x, y + e->h), uvScale);
+			//printf("%d: %.2f %.2f; %d: %.2f %.2f; %d: %.2f %.2f\n",
+			//	Ai, uv[Ai].x, uv[Ai].y,
+			//	Bi, uv[Bi].x, uv[Bi].y,
+			//	Ci, uv[Ci].x, uv[Ci].y);
+		}
+		flipped = !flipped;
+	}
+	LM_FREE(wave);
+
+	char *filename = "packing.tga";
+	if (lmImageSaveTGAub(filename, data, width, height, 3))
+		printf("Saved %s\n", filename);
+	LM_FREE(data);
 	LM_FREE(entries);
+	
+	return processed * 3;
 }
 
 static int bake(lm_scene *scene)
@@ -101,80 +276,59 @@ static int bake(lm_scene *scene)
 	
 	double bakeStart = glfwGetTime();
 
-	for (int i = 0; i < scene->gl->nlightmaps; i++)
+	float *data = scene->data;
+	int w = scene->w, h = scene->h;
+
+	memset(data, 0, sizeof(float) * w * h * 4); // clear lightmap before rendering to it.
+	lmSetTargetLightmap(ctx, data, w, h, 4);
+
+	lmSetGeometry(ctx, NULL,
+		LM_FLOAT, scene->positions, 0,
+		LM_FLOAT, scene->texcoords, 0,
+		scene->vertices, LM_NONE, 0);
+
+	int vp[4];
+	float view[16], projection[16];
+	double lastUpdateTime = 0.0;
+	while (lmBegin(ctx, vp, view, projection))
 	{
-		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
-		float *data = glLightmap->data;
-		int w = glLightmap->w, h = glLightmap->h;
+		// render to lightmapper framebuffer
+		glViewport(vp[0], vp[1], vp[2], vp[3]);
+		drawScene(scene, view, projection);
 
-		memset(data, 0, sizeof(float) * w * h * 4); // clear lightmap before rendering to it.
-		lmSetTargetLightmap(ctx, data, w, h, 4);
-
-		for (int j = 0; j < scene->yo->nshapes; j++)
+		// display progress every second (printf is expensive)
+		double time = glfwGetTime();
+		if (time - lastUpdateTime > 1.0)
 		{
-			yo_shape *yoShape = scene->yo->shapes + j;
-			if (yoShape->matid == i)
-			{
-				lmSetGeometry(ctx, NULL,
-					LM_FLOAT, yoShape->pos, 0,
-					LM_FLOAT, yoShape->texcoord, 0,
-					yoShape->nelems * 3, LM_UNSIGNED_INT, yoShape->elem);
-
-				int vp[4];
-				float view[16], projection[16];
-				double lastUpdateTime = 0.0;
-				while (lmBegin(ctx, vp, view, projection))
-				{
-					// render to lightmapper framebuffer
-					glViewport(vp[0], vp[1], vp[2], vp[3]);
-					drawScene(scene, view, projection);
-
-					// display progress every second (printf is expensive)
-					double time = glfwGetTime();
-					if (time - lastUpdateTime > 1.0)
-					{
-						lastUpdateTime = time;
-						printf("\r%6.2f%%", lmProgress(ctx) * 100.0f);
-						fflush(stdout);
-					}
-
-					lmEnd(ctx);
-				}
-				printf("\rFinished baking %d triangles.\n", yoShape->nelems);
-			}
+			lastUpdateTime = time;
+			printf("\r%6.2f%%", lmProgress(ctx) * 100.0f);
+			fflush(stdout);
 		}
-	}
 
+		lmEnd(ctx);
+	}
+	printf("\rFinished baking %d triangles.\n", scene->vertices / 3);
 	printf("Baking took %.1fs.\n", (float)(glfwGetTime() - bakeStart));
 
-	for (int i = 0; i < scene->gl->nlightmaps; i++)
+	// postprocess texture
+	float *temp = calloc(w * h * 4, sizeof(float));
+	lmImageSmooth(data, temp, w, h, 4);
+	lmImageDilate(temp, data, w, h, 4);
+	for (int i = 0; i < 16; i++)
 	{
-		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
-		float *data = glLightmap->data;
-		int w = glLightmap->w, h = glLightmap->h;
-
-		// postprocess texture
-		float *temp = calloc(w * h * 4, sizeof(float));
-		lmImageSmooth(data, temp, w, h, 4);
+		lmImageDilate(data, temp, w, h, 4);
 		lmImageDilate(temp, data, w, h, 4);
-		for (int i = 0; i < 16; i++)
-		{
-			lmImageDilate(data, temp, w, h, 4);
-			lmImageDilate(temp, data, w, h, 4);
-		}
-		lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
-		free(temp);
-
-		// save result to a file
-		char filename[64];
-		sprintf(filename, "lightmap%03d.tga", i);
-		if (lmImageSaveTGAf(filename, data, w, h, 4, 1.0f))
-			printf("Saved %s\n", filename);
-	
-		// upload result
-		glBindTexture(GL_TEXTURE_2D, glLightmap->texture);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
 	}
+	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
+	free(temp);
+
+	// save result to a file
+	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
+		printf("Saved result.tga\n");
+
+	// upload result
+	glBindTexture(GL_TEXTURE_2D, scene->texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
 
 	lmDestroy(ctx);
 	return 1;
@@ -259,72 +413,70 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 static int initScene(lm_scene *scene)
 {
 	// load obj
-	scene->yo = yo_load_obj("gazebo.obj", true, false);
-	if (!scene->yo || !scene->yo->nshapes)
+	yo_scene *yo = yo_load_obj("gazebo.obj", true, false);
+	if (!yo || !yo->nshapes)
 	{
 		fprintf(stderr, "Error loading obj file\n");
 		return 0;
 	}
 
-	scene->gl = calloc(sizeof(gl_scene), 1);
-	scene->gl->shapes = calloc(sizeof(gl_shape), scene->yo->nshapes);
-	scene->gl->nshapes = scene->yo->nshapes;
-	scene->gl->lightmaps = calloc(sizeof(gl_lightmap), scene->yo->nmaterials);
-	scene->gl->nlightmaps = scene->yo->nmaterials;
-
-	// upload geometry to opengl
-	for (int i = 0; i < scene->yo->nshapes; i++)
+	scene->vertices = 0;
+	for (int i = 0; i < yo->nshapes; i++)
+		scene->vertices += yo->shapes[i].nelems * 3;
+	
+	scene->positions = LM_CALLOC(scene->vertices, sizeof(lm_vec3));
+	scene->texcoords = LM_CALLOC(scene->vertices, sizeof(lm_vec2));
+	size_t positionsSize = scene->vertices * sizeof(lm_vec3);
+	size_t texcoordsSize = scene->vertices * sizeof(lm_vec2);
+	
+	int n = 0;
+	for (int i = 0; i < yo->nshapes; i++)
 	{
-		yo_shape *yoShape = scene->yo->shapes + i;
-		gl_shape *glShape = scene->gl->shapes + i;
-
-		const size_t positionsSize = yoShape->nverts * 3 * sizeof(float);
-		const size_t texcoordsSize = yoShape->nverts * 2 * sizeof(float);
-		const size_t indicesSize   = yoShape->nelems * 3 * sizeof(int);
-
-		glGenVertexArrays(1, &glShape->vao);
-		glBindVertexArray(glShape->vao);
-
-		glGenBuffers(1, &glShape->vbo);
-		glBindBuffer(GL_ARRAY_BUFFER, glShape->vbo);
-		glBufferData(GL_ARRAY_BUFFER, positionsSize + texcoordsSize, NULL, GL_STATIC_DRAW);
-		unsigned char *buffer = (unsigned char*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-		assert(buffer);
-		memcpy(buffer                , yoShape->pos     , positionsSize);
-		memcpy(buffer + positionsSize, yoShape->texcoord, texcoordsSize);
-		glUnmapBuffer(GL_ARRAY_BUFFER);
-
-		glGenBuffers(1, &glShape->ibo);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, glShape->ibo);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indicesSize, yoShape->elem, GL_STATIC_DRAW);
-
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
-		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void*)positionsSize);
-
-		glShape->nindices = yoShape->nelems * 3;
-		glShape->lightmapIndex = yoShape->matid;
+		yo_shape *shape = yo->shapes + i;
+		for (int j = 0; j < shape->nelems * 3; j++)
+			scene->positions[n + j] = *(lm_vec3*)&shape->pos[shape->elem[j] * 3];
+		n += shape->nelems * 3;
 	}
+	yo_free_scene(yo);
+	
+	// create lightmap texture atlas
+	scene->w = 1024;
+	scene->h = 1024;
+	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 380.0f, scene->texcoords);
+	if (processed < scene->vertices)
+	{
+		fprintf(stderr, "Could not pack all triangles into the lightmap! (%d/%d)\n", processed / 3, scene->vertices / 3);
+		return 0;
+	}
+	
+	// upload geometry to opengl
+	glGenVertexArrays(1, &scene->vao);
+	glBindVertexArray(scene->vao);
+
+	glGenBuffers(1, &scene->vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, scene->vbo);
+	glBufferData(GL_ARRAY_BUFFER, positionsSize + texcoordsSize, NULL, GL_STATIC_DRAW);
+	unsigned char *buffer = (unsigned char*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+	assert(buffer);
+	memcpy(buffer                , scene->positions, positionsSize);
+	memcpy(buffer + positionsSize, scene->texcoords, texcoordsSize);
+	glUnmapBuffer(GL_ARRAY_BUFFER);
+
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void*)positionsSize);
 
 	// create black lightmap textures
-	for (int i = 0; i < scene->yo->nmaterials; i++)
-	{
-		yo_material *material = scene->yo->materials + i;
-		gl_lightmap *lightmap = scene->gl->lightmaps + i;
-
-		lightmap->w = 1024;//654; // TODO: choose texture resolutions?
-		lightmap->h = 1024;//654;
-		lightmap->data = calloc(lightmap->w * lightmap->h * 4, sizeof(float));
-		glGenTextures(1, &lightmap->texture);
-		glBindTexture(GL_TEXTURE_2D, lightmap->texture);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		unsigned char emissive[] = { 0, 0, 0, 255 }; // black = no light emission
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
-	}
+	scene->data = calloc(scene->w * scene->h * 4, sizeof(float));
+	glGenTextures(1, &scene->texture);
+	glBindTexture(GL_TEXTURE_2D, scene->texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	unsigned char emissive[] = { 0, 0, 0, 255 }; // black = no light emission
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
 
 	// load shader
 	const char *vp =
@@ -358,15 +510,15 @@ static int initScene(lm_scene *scene)
 		"a_texcoord"
 	};
 
-	scene->gl->program = loadProgram(vp, fp, attribs, 2);
-	if (!scene->gl->program)
+	scene->program = loadProgram(vp, fp, attribs, 2);
+	if (!scene->program)
 	{
 		fprintf(stderr, "Error loading shader\n");
 		return 0;
 	}
-	scene->gl->u_view = glGetUniformLocation(scene->gl->program, "u_view");
-	scene->gl->u_projection = glGetUniformLocation(scene->gl->program, "u_projection");
-	scene->gl->u_lightmap = glGetUniformLocation(scene->gl->program, "u_lightmap");
+	scene->u_view = glGetUniformLocation(scene->program, "u_view");
+	scene->u_projection = glGetUniformLocation(scene->program, "u_projection");
+	scene->u_lightmap = glGetUniformLocation(scene->program, "u_lightmap");
 
 	return 1;
 }
@@ -375,41 +527,25 @@ static void drawScene(lm_scene *scene, float *view, float *projection)
 {
 	glEnable(GL_DEPTH_TEST);
 
-	glUseProgram(scene->gl->program);
-	glUniform1i(scene->gl->u_lightmap, 0);
-	glUniformMatrix4fv(scene->gl->u_projection, 1, GL_FALSE, projection);
-	glUniformMatrix4fv(scene->gl->u_view, 1, GL_FALSE, view);
+	glUseProgram(scene->program);
+	glUniform1i(scene->u_lightmap, 0);
+	glUniformMatrix4fv(scene->u_projection, 1, GL_FALSE, projection);
+	glUniformMatrix4fv(scene->u_view, 1, GL_FALSE, view);
 
-	for (int i = 0; i < scene->gl->nshapes; i++)
-	{
-		gl_shape *glShape = scene->gl->shapes + i;
-		glBindTexture(GL_TEXTURE_2D, scene->gl->lightmaps[glShape->lightmapIndex].texture);
-
-		glBindVertexArray(glShape->vao);
-		glDrawElements(GL_TRIANGLES, glShape->nindices, GL_UNSIGNED_INT, 0);
-	}
+	glBindTexture(GL_TEXTURE_2D, scene->texture);
+	glBindVertexArray(scene->vao);
+	glDrawArrays(GL_TRIANGLES, 0, scene->vertices);
 }
 
 static void destroyScene(lm_scene *scene)
 {
-	yo_free_scene(scene->yo);
-	for (int i = 0; i < scene->gl->nshapes; i++)
-	{
-		gl_shape *glShape = scene->gl->shapes + i;
-		glDeleteVertexArrays(1, &glShape->vao);
-		glDeleteBuffers(1, &glShape->vbo);
-		glDeleteBuffers(1, &glShape->ibo);
-	}
-	for (int i = 0; i < scene->gl->nlightmaps; i++)
-	{
-		gl_lightmap *glLightmap = scene->gl->lightmaps + i;
-		free(glLightmap->data);
-		glDeleteTextures(1, &glLightmap->texture);
-	}
-	glDeleteProgram(scene->gl->program);
-	free(scene->gl->shapes);
-	free(scene->gl->lightmaps);
-	free(scene->gl);
+	glDeleteVertexArrays(1, &scene->vao);
+	glDeleteBuffers(1, &scene->vbo);
+	glDeleteTextures(1, &scene->texture);
+	glDeleteProgram(scene->program);
+	free(scene->positions);
+	free(scene->texcoords);
+	free(scene->data);
 }
 
 static GLuint loadShader(GLenum type, const char *source)
