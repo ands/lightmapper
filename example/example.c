@@ -267,6 +267,37 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	return processed * 3;
 }
 
+static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices, unsigned char *data, int w, int h, int c)
+{
+	lm_vec3 bbmin = lm_v3(FLT_MAX, FLT_MAX, FLT_MAX);
+	lm_vec3 bbmax = lm_v3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+	int *hashmap = (int*)LM_CALLOC(vertices * 2, sizeof(int));
+	for (int i = 0; i < vertices; i++)
+	{
+		bbmin = lm_min3(bbmin, positions[i]);
+		bbmax = lm_max3(bbmax, positions[i]);
+		hashmap[i * 2 + 0] = -1;
+		hashmap[i * 2 + 1] = -1;
+	}
+	
+	lm_vec3 bbscale = lm_v3(15.9f / bbmax.x, 15.9f / bbmax.y, 15.9f / bbmax.z);
+
+	for (int i = 0; i < vertices; i++)
+	{
+		lm_vec3 p = lm_mul3(lm_sub3(positions[i], bbmin), bbscale);
+		int hash = (281 * (int)p.x + 569 * (int)p.y + 1447 * (int)p.z) % (vertices * 2);
+		while (hashmap[hash] >= 0)
+		{
+			int index = hashmap[hash];
+			if (lm_length3sq(lm_sub3(positions[index], positions[i])) < 0.0001f)
+				
+			if (++hash == vertices * 2)
+				hash = 0;
+		}
+		hashmap[hash] = i;
+	}
+}
+
 static void injectDirectLighting(lm_scene *scene)
 {
 	for (int i = 400; i < 600; i++)
@@ -343,6 +374,7 @@ static int bake(lm_scene *scene)
 		lmImageDilate(data, temp, w, h, 4);
 		lmImageDilate(temp, data, w, h, 4);
 	}
+	ta_smooth_edges(scene->positions, scene->texcoords, scene->vertices, data, w, h);
 	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
 	free(temp);
 
@@ -406,26 +438,23 @@ int main(int argc, char* argv[])
 
 	while (!glfwWindowShouldClose(window))
 	{
-		printf("A\n");
 		glfwPollEvents();
-		printf("B\n");
 		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
 			bake(&scene);
-		printf("C\n");
+
 		int w, h;
 		glfwGetFramebufferSize(window, &w, &h);
 		glViewport(0, 0, w, h);
-		printf("D\n");
+
 		// camera for glfw window
 		float view[16], projection[16];
 		fpsCameraViewMatrix(window, view);
 		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-		printf("E\n");
+
 		// draw to screen with a blueish sky
 		glClearColor(sky[0], sky[1], sky[2], 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		drawScene(&scene, view, projection);
-		printf("F\n");
 
 		glfwSwapBuffers(window);
 	}
