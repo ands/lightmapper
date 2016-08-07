@@ -95,7 +95,10 @@ static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
 	}
 }
 
-static int ta_wave_wash_up(int *wave, int y0, int x1, int y1, int *ySupport)
+static int ta_max(int a, int b) { return a > b ? a : b; }
+static int ta_min(int a, int b) { return a > b ? b : a; }
+
+static int ta_wave_wash_up(int *wave, int height, int y0, int x1, int y1, int spacing)
 {
 	int x0 = 0;
 	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
@@ -104,12 +107,11 @@ static int ta_wave_wash_up(int *wave, int y0, int x1, int y1, int *ySupport)
 	int x = 0;
 	for(;;)
 	{
-		int xDistance = wave[y0] - x0 - x;
+		int xDistance = wave[y0] - x0 - x; //wave[y0] - x0 - x;
+		for (int y = ta_max(y0 - spacing, 0); y <= ta_min(y0 + spacing, height - 1); y++)
+			xDistance = ta_max(wave[y] - x0 - x, xDistance);
 		if (xDistance >= 0)
-		{
-			*ySupport = y0;
 			x += xDistance;
-		}
 		if (x0 == x1 && y0 == y1) break;
 		e2 = err;
 		if (e2 > -dx) { err -= dy; x0 += sx; }
@@ -173,19 +175,14 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		if (flipped)
 		{
 			int yf = y + ch - e->h;
-			int ySupport = 0;
-			int x      = ta_wave_wash_up(wave, yf + e->h, e->x       , yf, &ySupport);
-			int xHflip = ta_wave_wash_up(wave, yf + e->h, e->w - e->x, yf, &ySupport);
+			int x      = ta_wave_wash_up(wave, height, yf + e->h, e->x       , yf, spacing);
+			int xHflip = ta_wave_wash_up(wave, height, yf + e->h, e->w - e->x, yf, spacing);
 			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
 			{
 				x = xHflip;
 				e->hflip = 1;
 				e->x = e->w - e->x;
 			}
-			if (ySupport == yf)
-				x += e->h == ch ? 0 : prevSlopeSpacing;
-			else if (ySupport < yf + e->h)
-				x += 2 * (int)ceilf(e->x / (float)e->h);
 			if (x + e->w + spacing > width)
 			{
 				x = spacing;
@@ -195,7 +192,6 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 				if (y + e->h + spacing > height)
 					break;
 			}
-			prevSlopeSpacing = 4 * (int)ceilf((e->w - e->x) / (float)e->h);
 			ta_wave_surge(wave, x + e->x + spacing + 1, yf, x + e->w + spacing + 1, yf + e->h);
 
 #ifdef TA_DEBUG
@@ -216,19 +212,14 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		}
 		else
 		{
-			int ySupport = 0;
-			int x      = ta_wave_wash_up(wave, y, e->x       , y + e->h, &ySupport);
-			int xHflip = ta_wave_wash_up(wave, y, e->w - e->x, y + e->h, &ySupport);
+			int x      = ta_wave_wash_up(wave, height, y, e->x       , y + e->h, spacing);
+			int xHflip = ta_wave_wash_up(wave, height, y, e->w - e->x, y + e->h, spacing);
 			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
 			{
 				x = xHflip;
 				e->hflip = 1;
 				e->x = e->w - e->x;
 			}
-			if (ySupport == y + e->h)
-				x += e->h == ch ? 0 : prevSlopeSpacing;
-			else if (ySupport > y)
-				x += 2 * (int)ceilf(e->x / (float)e->h);
 			if (x + e->w + spacing > width)
 			{
 				x = spacing;
@@ -237,7 +228,6 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 				if (y + e->h + spacing > height)
 					break;
 			}
-			prevSlopeSpacing = 4 * (int)ceilf((e->w - e->x) / (float)e->h);
 			ta_wave_surge(wave, x + e->x + spacing + 1, y + e->h, x + e->w + spacing + 1, y);
 
 #ifdef TA_DEBUG
@@ -279,9 +269,9 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 
 static void injectDirectLighting(lm_scene *scene)
 {
-	for (int i = 800; i < 1200; i++)
+	for (int i = 400; i < 600; i++)
 	{
-		for (int j = 400; j < 800; j++)
+		for (int j = 200; j < 400; j++)
 		{
 			scene->data[(i * scene->w + j) * 4 + 0] = 0.0f;
 			scene->data[(i * scene->w + j) * 4 + 1] = 0.5f;
@@ -297,7 +287,7 @@ static float bakeScale = 0.01f;
 static int bake(lm_scene *scene)
 {
 	lm_context *ctx = lmCreate(
-		256,                    // hemisphere resolution (power of two, max=512)
+		128,                    // hemisphere resolution (power of two, max=512)
 		0.0001f, 100.0f,        // zNear, zFar of hemisphere cameras
 		bakeScale * sky[0], bakeScale * sky[1], bakeScale * sky[2], // background color (white for ambient occlusion)
 		2, 0.01f);              // lightmap interpolation & threshold (small differences are interpolated rather than sampled)
@@ -416,23 +406,26 @@ int main(int argc, char* argv[])
 
 	while (!glfwWindowShouldClose(window))
 	{
+		printf("A\n");
 		glfwPollEvents();
+		printf("B\n");
 		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
 			bake(&scene);
-
+		printf("C\n");
 		int w, h;
 		glfwGetFramebufferSize(window, &w, &h);
 		glViewport(0, 0, w, h);
-
+		printf("D\n");
 		// camera for glfw window
 		float view[16], projection[16];
 		fpsCameraViewMatrix(window, view);
 		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-		
+		printf("E\n");
 		// draw to screen with a blueish sky
 		glClearColor(sky[0], sky[1], sky[2], 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		drawScene(&scene, view, projection);
+		printf("F\n");
 
 		glfwSwapBuffers(window);
 	}
@@ -476,9 +469,9 @@ static int initScene(lm_scene *scene)
 	yo_free_scene(yo);
 	
 	// create lightmap texture atlas
-	scene->w = 2048;
-	scene->h = 2048;
-	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 309.0f/*144.0f/*375.0f*/, scene->texcoords);
+	scene->w = 1024;
+	scene->h = 1024;
+	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 136.0f/*375.0f*/, scene->texcoords);
 	if (processed < scene->vertices)
 	{
 		fprintf(stderr, "Could not pack all triangles into the lightmap! (%d/%d)\n", processed / 3, scene->vertices / 3);
