@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 01.08.2016 *
+* author: Andreas Mantler (ands) | last change: 07.08.2016 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -150,6 +150,7 @@ static inline lm_vec2  lm_div2      (lm_vec2 a, float   b) { return lm_scale2(a,
 static inline lm_vec2  lm_pmod2     (lm_vec2 a, float   b) { return lm_v2(lm_pmodf(a.x, b), lm_pmodf(a.y, b)); }
 static inline lm_vec2  lm_min2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_minf(a.x, b.x), lm_minf(a.y, b.y)); }
 static inline lm_vec2  lm_max2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y)); }
+static inline lm_vec2  lm_abs2      (lm_vec2 a           ) { return lm_v2(lm_absf(a.x), lm_absf(a.y)); }
 static inline lm_vec2  lm_floor2    (lm_vec2 a           ) { return lm_v2(floorf(a.x), floorf(a.y)); }
 static inline lm_vec2  lm_ceil2     (lm_vec2 a           ) { return lm_v2(ceilf (a.x), ceilf (a.y)); }
 static inline float    lm_dot2      (lm_vec2 a, lm_vec2 b) { return a.x * b.x + a.y * b.y; }
@@ -170,6 +171,7 @@ static inline lm_vec3  lm_div3      (lm_vec3 a, float   b) { return lm_scale3(a,
 static inline lm_vec3  lm_pmod3     (lm_vec3 a, float   b) { return lm_v3(lm_pmodf(a.x, b), lm_pmodf(a.y, b), lm_pmodf(a.z, b)); }
 static inline lm_vec3  lm_min3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_minf(a.x, b.x), lm_minf(a.y, b.y), lm_minf(a.z, b.z)); }
 static inline lm_vec3  lm_max3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y), lm_maxf(a.z, b.z)); }
+static inline lm_vec3  lm_abs3      (lm_vec3 a           ) { return lm_v3(lm_absf(a.x), lm_absf(a.y), lm_absf(a.z)); }
 static inline lm_vec3  lm_floor3    (lm_vec3 a           ) { return lm_v3(floorf(a.x), floorf(a.y), floorf(a.z)); }
 static inline lm_vec3  lm_ceil3     (lm_vec3 a           ) { return lm_v3(ceilf (a.x), ceilf (a.y), ceilf (a.z)); }
 static inline float    lm_dot3      (lm_vec3 a, lm_vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
@@ -341,13 +343,16 @@ struct lm_context
 			GLuint programID;
 			GLuint hemispheresTextureID;
 		} downsamplePass;
-		struct
+		/*struct
 		{
 			GLuint pbo;
 			lm_bool pboTransferStarted;
 			unsigned int fbHemiCount;
 			lm_ivec2 *fbHemiToLightmapLocation;
-		} transfer;
+		} transfer;*/
+
+		GLuint storageTexture;
+		lm_ivec2 storagePosition;
 	} hemisphere;
 
 	float interpolationThreshold;
@@ -642,7 +647,17 @@ static void lm_beginProcessHemisphereBatch(lm_context *ctx)
 		glBindTexture(GL_TEXTURE_2D, 0);
 	}
 
-	if (fbWrite == 0) // copy to other fb if we end up in fb 0, so that fb 0 can be written to while the data is async transferred!
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glBindVertexArray(0);
+	glEnable(GL_DEPTH_TEST);
+
+	glCopyImageSubData(
+		ctx->hemisphere.fbTexture[fbWrite], GL_TEXTURE_2D, 0, 0, 0, 0,
+		ctx->hemisphere.storageTexture, GL_TEXTURE_2D, 0, ctx->hemisphere.storagePosition.x, ctx->hemisphere.storagePosition.y, 0,
+		ctx->hemisphere.fbHemiCountX, ctx->hemisphere.fbHemiCountY, 1);
+
+
+	/*if (fbWrite == 0) // copy to other fb if we end up in fb 0, so that fb 0 can be written to while the data is async transferred!
 	{
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -671,30 +686,31 @@ static void lm_beginProcessHemisphereBatch(lm_context *ctx)
 
 	LM_SWAP(lm_ivec2*, ctx->hemisphere.transfer.fbHemiToLightmapLocation, ctx->hemisphere.fbHemiToLightmapLocation);
 	ctx->hemisphere.transfer.fbHemiCount = ctx->hemisphere.fbHemiIndex;
-	ctx->hemisphere.transfer.pboTransferStarted = LM_TRUE;
+	ctx->hemisphere.transfer.pboTransferStarted = LM_TRUE;*/
 
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glBindVertexArray(0);
-	glEnable(GL_DEPTH_TEST);
+
 
 	ctx->hemisphere.fbHemiIndex = 0;
 }
 
-static void lm_finishProcessHemisphereBatch(lm_context *ctx)
+static void lm_writeResultsToLightmap(lm_context *ctx)
 {
-	if (!ctx->hemisphere.transfer.pboTransferStarted)
-		return; // nothing to do
+	//if (!ctx->hemisphere.transfer.pboTransferStarted)
+	//	return; // nothing to do
 
 	// finish the GPU->CPU transfer of downsampled hemispheres
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.transfer.pbo);
-	float *hemi = (float*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+	float *hemi = LM_CALLOC(ctx->lightmap.width * ctx->lightmap.height, 4 * sizeof(float));
+	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.storageTexture);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, hemi);
+	//glBindBuffer(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.transfer.pbo);
+	//float *hemi = (float*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
 	//float *hemi = (float*)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, ctx->hemisphere.transfer.fbHemiCount * 4 * sizeof(float), GL_MAP_READ_BIT);
-	assert(hemi);
+	/*assert(hemi);
 	if (!hemi)
 	{
 		fprintf(stderr, "Fatal error! Could not map hemisphere buffer!\n");
 		exit(-1);
-	}
+	}*/
 
 	// write results to lightmap texture
 	unsigned int hemiIndex = 0;
@@ -745,9 +761,9 @@ static void lm_finishProcessHemisphereBatch(lm_context *ctx)
 				goto done;
 		}
 	}
-done:
-	glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-	ctx->hemisphere.transfer.pboTransferStarted = LM_FALSE;
+//done:
+	//glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+	//ctx->hemisphere.transfer.pboTransferStarted = LM_FALSE;
 }
 
 static void lm_setView(

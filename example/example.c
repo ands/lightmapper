@@ -95,9 +95,6 @@ static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
 	}
 }
 
-static int ta_max(int a, int b) { return a > b ? a : b; }
-static int ta_min(int a, int b) { return a > b ? b : a; }
-
 static int ta_wave_wash_up(int *wave, int height, int y0, int x1, int y1, int spacing)
 {
 	int x0 = 0;
@@ -108,8 +105,8 @@ static int ta_wave_wash_up(int *wave, int height, int y0, int x1, int y1, int sp
 	for(;;)
 	{
 		int xDistance = wave[y0] - x0 - x; //wave[y0] - x0 - x;
-		for (int y = ta_max(y0 - spacing, 0); y <= ta_min(y0 + spacing, height - 1); y++)
-			xDistance = ta_max(wave[y] - x0 - x, xDistance);
+		for (int y = lm_maxi(y0 - spacing, 0); y <= lm_mini(y0 + spacing, height - 1); y++)
+			xDistance = lm_maxi(wave[y] - x0 - x, xDistance);
 		if (xDistance >= 0)
 			x += xDistance;
 		if (x0 == x1 && y0 == y1) break;
@@ -267,7 +264,69 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	return processed * 3;
 }
 
-static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices, unsigned char *data, int w, int h, int c)
+static void ta_float_line(float *data, int w, int h, int c, lm_vec2 p0, lm_vec2 p1, float r, float g, float b)
+{
+	int x0 = (int)(p0.x * w);
+	int y0 = (int)(p0.y * h);
+	int x1 = (int)(p1.x * w);
+	int y1 = (int)(p1.y * h);
+	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+	int err = (dx > dy ? dx : -dy) / 2, e2;
+	for (;;)
+	{
+		float *p = data + (y0 * w + x0) * c;
+		p[0] = r; p[1] = g; p[2] = b;
+
+		if (x0 == x1 && y0 == y1) break;
+		e2 = err;
+		if (e2 > -dx) { err -= dy; x0 += sx; }
+		if (e2 <  dy) { err += dx; y0 += sy; }
+	}
+}
+
+static void ta_smooth_edge(lm_vec2 a0, lm_vec2 a1, lm_vec2 b0, lm_vec2 b1, float *data, int w, int h, int c)
+{
+	//ta_float_line(data, w, h, c, a0, b0, 1.0f, 0.0f, 0.0f);
+	//ta_float_line(data, w, h, c, a1, b1, 0.0f, 1.0f, 0.0f);
+	lm_vec2 s = lm_v2i(w, h);
+	a0 = lm_mul2(a0, s);
+	a1 = lm_mul2(a1, s);
+	b0 = lm_mul2(b0, s);
+	b1 = lm_mul2(b1, s);
+	lm_vec2 ad = lm_sub2(a1, a0);
+	lm_vec2 bd = lm_sub2(b1, b0);
+	float l = lm_length2(ad);
+	int iterations = (int)(l * 10.0f);
+	float step = 1.0f / iterations;
+	for (int i = 0; i <= iterations; i++)
+	{
+		float t = i * step;
+		lm_vec2 a = lm_add2(a0, lm_scale2(ad, t));
+		lm_vec2 b = lm_add2(b0, lm_scale2(bd, t));
+		int ax = (int)roundf(a.x), ay = (int)roundf(a.y);
+		int bx = (int)roundf(b.x), by = (int)roundf(b.y);
+		for (int j = 0; j < c; j++)
+		{
+			float ac = data[(ay * w + ax) * c + j];
+			float bc = data[(by * w + bx) * c + j];
+			if (ac > 0.0f && bc > 0.0f)
+			{
+				float amount = (ac > 0.0f && bc > 0.0f) ? 0.5f : 1.0f;
+				data[(ay * w + ax) * c + j] = data[(by * w + bx) * c + j] = amount * (ac + bc);
+			}
+		}
+	}
+}
+
+static int ta_should_smooth(lm_vec3 *tria, lm_vec3 *trib)
+{
+	lm_vec3 n0 = lm_normalize3(lm_cross3(lm_sub3(tria[1], tria[0]), lm_sub3(tria[2], tria[0])));
+	lm_vec3 n1 = lm_normalize3(lm_cross3(lm_sub3(trib[1], trib[0]), lm_sub3(trib[2], trib[0])));
+	return lm_absf(lm_dot3(n0, n1)) > 0.5f; // TODO: make threshold an argument!
+}
+
+static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices, float *data, int w, int h, int c)
 {
 	lm_vec3 bbmin = lm_v3(FLT_MAX, FLT_MAX, FLT_MAX);
 	lm_vec3 bbmax = lm_v3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
@@ -282,27 +341,41 @@ static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices
 	
 	lm_vec3 bbscale = lm_v3(15.9f / bbmax.x, 15.9f / bbmax.y, 15.9f / bbmax.z);
 
-	for (int i = 0; i < vertices; i++)
+	for (int i0 = 0; i0 < vertices; i0++)
 	{
-		lm_vec3 p = lm_mul3(lm_sub3(positions[i], bbmin), bbscale);
+		int tri = i0 - (i0 % 3);
+		int i1 = tri + ((i0 + 1) % 3);
+		int i2 = tri + ((i0 + 2) % 3);
+		lm_vec3 p = lm_mul3(lm_sub3(positions[i0], bbmin), bbscale);
 		int hash = (281 * (int)p.x + 569 * (int)p.y + 1447 * (int)p.z) % (vertices * 2);
 		while (hashmap[hash] >= 0)
 		{
-			int index = hashmap[hash];
-			if (lm_length3sq(lm_sub3(positions[index], positions[i])) < 0.0001f)
-				
+			int oi0 = hashmap[hash];
+#define TA_EQUAL(a, b) lm_length3sq(lm_sub3(positions[a], positions[b])) < 0.00001f
+			if (TA_EQUAL(oi0, i0))
+			{
+				int otri = oi0 - (oi0 % 3);
+				int oi1 = otri + ((oi0 + 1) % 3);
+				int oi2 = otri + ((oi0 + 2) % 3);
+				if (TA_EQUAL(oi1, i1) && ta_should_smooth(positions + tri, positions + otri))
+					ta_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi1], data, w, h, c);
+				//else if (TA_EQUAL(oi1, i2) && ta_should_smooth(positions + tri, positions + otri))
+				//	ta_smooth_edge(texcoords[i0], texcoords[i2], texcoords[oi0], texcoords[oi1], data, w, h, c);
+				else if (TA_EQUAL(oi2, i1) && ta_should_smooth(positions + tri, positions + otri))
+					ta_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi2], data, w, h, c);
+			}
 			if (++hash == vertices * 2)
 				hash = 0;
 		}
-		hashmap[hash] = i;
+		hashmap[hash] = i0;
 	}
 }
 
 static void injectDirectLighting(lm_scene *scene)
 {
-	for (int i = 400; i < 600; i++)
+	for (int i = 200; i < 300; i++)
 	{
-		for (int j = 200; j < 400; j++)
+		for (int j = 0; j < 512; j++)
 		{
 			scene->data[(i * scene->w + j) * 4 + 0] = 0.0f;
 			scene->data[(i * scene->w + j) * 4 + 1] = 0.5f;
@@ -318,7 +391,7 @@ static float bakeScale = 0.01f;
 static int bake(lm_scene *scene)
 {
 	lm_context *ctx = lmCreate(
-		128,                    // hemisphere resolution (power of two, max=512)
+		64,                    // hemisphere resolution (power of two, max=512)
 		0.0001f, 100.0f,        // zNear, zFar of hemisphere cameras
 		bakeScale * sky[0], bakeScale * sky[1], bakeScale * sky[2], // background color (white for ambient occlusion)
 		2, 0.01f);              // lightmap interpolation & threshold (small differences are interpolated rather than sampled)
@@ -333,6 +406,9 @@ static int bake(lm_scene *scene)
 
 	float *data = scene->data;
 	int w = scene->w, h = scene->h;
+
+	glBindTexture(GL_TEXTURE_2D, scene->texture); // load linear lit lightmap (no gamma correction)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
 
 	memset(data, 0, sizeof(float) * w * h * 4); // clear lightmap before rendering to it.
 	lmSetTargetLightmap(ctx, data, w, h, 4);
@@ -367,26 +443,32 @@ static int bake(lm_scene *scene)
 
 	// postprocess texture
 	float *temp = calloc(w * h * 4, sizeof(float));
+	for (int i = 0; i < 1; i++)
+	{
+		//ta_smooth_edges(scene->positions, scene->texcoords, scene->vertices, data, w, h, 4);
+	}
 	lmImageSmooth(data, temp, w, h, 4);
 	lmImageDilate(temp, data, w, h, 4);
-	for (int i = 0; i < 16; i++)
+	for (int i = 0; i < 4; i++)
 	{
 		lmImageDilate(data, temp, w, h, 4);
 		lmImageDilate(temp, data, w, h, 4);
 	}
-	ta_smooth_edges(scene->positions, scene->texcoords, scene->vertices, data, w, h);
-	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
-	free(temp);
 
 	injectDirectLighting(scene);
 
+	lmImageDilate(data, temp, w, h, 4); // just copy to temp
+	lmImagePower(temp, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
+
 	// save result to a file
-	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
+	if (lmImageSaveTGAf("result.tga", temp, w, h, 4, 1.0f))
 		printf("Saved result.tga\n");
 
 	// upload result
 	glBindTexture(GL_TEXTURE_2D, scene->texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, temp);
+
+	free(temp);
 
 	lmDestroy(ctx);
 	return 1;
@@ -471,7 +553,7 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 static int initScene(lm_scene *scene)
 {
 	// load obj
-	yo_scene *yo = yo_load_obj("city.obj", true, false);
+	yo_scene *yo = yo_load_obj("gazebo.obj", true, false);
 	if (!yo || !yo->nshapes)
 	{
 		fprintf(stderr, "Error loading obj file\n");
@@ -498,9 +580,9 @@ static int initScene(lm_scene *scene)
 	yo_free_scene(yo);
 	
 	// create lightmap texture atlas
-	scene->w = 1024;
-	scene->h = 1024;
-	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 136.0f/*375.0f*/, scene->texcoords);
+	scene->w = 2048;
+	scene->h = 2048;
+	int processed = ta_pack(scene->positions, scene->vertices, scene->w, scene->h, 2, 760.0f/*28.9f/*136.0f/*375.0f*/, scene->texcoords);
 	if (processed < scene->vertices)
 	{
 		fprintf(stderr, "Could not pack all triangles into the lightmap! (%d/%d)\n", processed / 3, scene->vertices / 3);
