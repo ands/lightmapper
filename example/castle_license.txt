@@ -1,0 +1,7 @@
+Author: killyoverdrive
+Source: http://opengameart.org/content/small-fort-at-night
+License: CC-BY-SA 3.0, http://creativecommons.org/licenses/by-sa/3.0/
+
+Changes:
+Exported to a Wavefront OBJ format without the textures.
+Used here as a light mapping example mesh.
