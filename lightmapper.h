@@ -672,7 +672,7 @@ static void lm_integrateHemisphereBatch(lm_context *ctx)
 		for (unsigned int x = 0; x < ctx->hemisphere.fbHemiCountX; x++)
 		{
 			int sx = ctx->hemisphere.storage.writePosition.x + x;
-			int hemiIndex = y * ctx->hemisphere.fbHemiCountX + x;
+			unsigned int hemiIndex = y * ctx->hemisphere.fbHemiCountX + x;
 			if (hemiIndex >= ctx->hemisphere.fbHemiIndex)
 				ctx->hemisphere.storage.toLightmapLocation[sy * ctx->lightmap.width + sx] = lm_i2(-1, -1);
 			else
@@ -695,12 +695,12 @@ static void lm_integrateHemisphereBatch(lm_context *ctx)
 static void lm_writeResultsToLightmap(lm_context *ctx)
 {
 	// do the GPU->CPU transfer of downsampled hemispheres
-	float *hemi = LM_CALLOC(ctx->lightmap.width * ctx->lightmap.height, 4 * sizeof(float));
+	float *hemi = (float*)LM_CALLOC(ctx->lightmap.width * ctx->lightmap.height, 4 * sizeof(float));
 	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.storage.texture);
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, hemi);
 
 	// write results to lightmap texture
-	for (int y = 0; y < ctx->hemisphere.storage.writePosition.y + ctx->hemisphere.fbHemiCountY; y++)
+	for (int y = 0; y < ctx->hemisphere.storage.writePosition.y + (int)ctx->hemisphere.fbHemiCountY; y++)
 	{
 		for (int x = 0; x < ctx->lightmap.width; x++)
 		{
