@@ -55,8 +55,7 @@ static int ta_entry_cmp(const void *a, const void *b)
 	ta_entry *ea = (ta_entry*)a;
 	ta_entry *eb = (ta_entry*)b;
 	int dh = eb->h - ea->h;
-	int dw = eb->w - ea->w;
-	return dh != 0 ? dh : dw;
+	return dh != 0 ? dh : (eb->w - ea->w);
 }
 
 #ifdef TA_DEBUG
@@ -80,14 +79,17 @@ static void ta_line(unsigned char *data, int w, int h,
 }
 #endif
 
-static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
+static void ta_wave_surge(int *wave, int right, int x0, int y0, int x1, int y1)
 {
 	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
 	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
 	int err = (dx > dy ? dx : -dy) / 2, e2;
 	for(;;)
 	{
-		wave[y0] = x0;
+		if (right)
+			wave[y0] = x0 > wave[y0] ? x0 : wave[y0];
+		else
+			wave[y0] = x0 < wave[y0] ? x0 : wave[y0];
 		if (x0 == x1 && y0 == y1) break;
 		e2 = err;
 		if (e2 > -dx) { err -= dy; x0 += sx; }
@@ -95,7 +97,7 @@ static void ta_wave_surge(int *wave, int x0, int y0, int x1, int y1)
 	}
 }
 
-static int ta_wave_wash_up(int *wave, int height, int y0, int x1, int y1, int spacing)
+static int ta_wave_wash_up(int *wave, int right, int height, int y0, int x1, int y1, int spacing)
 {
 	int x0 = 0;
 	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
@@ -104,11 +106,22 @@ static int ta_wave_wash_up(int *wave, int height, int y0, int x1, int y1, int sp
 	int x = 0;
 	for(;;)
 	{
-		int xDistance = wave[y0] - x0 - x; //wave[y0] - x0 - x;
-		for (int y = lm_maxi(y0 - spacing, 0); y <= lm_mini(y0 + spacing, height - 1); y++)
-			xDistance = lm_maxi(wave[y] - x0 - x, xDistance);
-		if (xDistance >= 0)
-			x += xDistance;
+		if (right)
+		{
+			int xDistance = wave[y0] - x0 - x;
+			for (int y = lm_maxi(y0 - spacing, 0); y <= lm_mini(y0 + spacing, height - 1); y++)
+				xDistance = lm_maxi(wave[y] - x0 - x, xDistance);
+			if (xDistance >= 0)
+				x += xDistance;
+		}
+		else
+		{
+			int xDistance = x0 + x - wave[y0];
+			for (int y = lm_maxi(y0 - spacing, 0); y <= lm_mini(y0 + spacing, height - 1); y++)
+				xDistance = lm_maxi(x0 + x - wave[y], xDistance);
+			if (xDistance >= 0)
+				x += xDistance;
+		}
 		if (x0 == x1 && y0 == y1) break;
 		e2 = err;
 		if (e2 > -dx) { err -= dy; x0 += sx; }
@@ -130,13 +143,13 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		tv[1] = lm_sub3(tp[2], tp[1]);
 		tv[2] = lm_sub3(tp[0], tp[2]);
 		float tvlsq[3] = { lm_length3sq(tv[0]), lm_length3sq(tv[1]), lm_length3sq(tv[2]) };
-		
+
 		// find long edge
 		int maxi;        float maxl = tvlsq[0]; maxi = 0;
 		if (tvlsq[1] > maxl) { maxl = tvlsq[1]; maxi = 1; }
 		if (tvlsq[2] > maxl) { maxl = tvlsq[2]; maxi = 2; }
 		int nexti = (maxi + 1) % 3;
-		
+
 		// measure triangle
 		float w = sqrtf(maxl);
 		float x = -lm_dot3(tv[maxi], tv[nexti]) / w;
@@ -151,22 +164,27 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		e->hflip = 0;
 	}
 	qsort(entries, count / 3, sizeof(ta_entry), ta_entry_cmp);
-	
+
 	lm_vec2 uvScale = lm_v2(1.0f / width, 1.0f / height);
 
-	unsigned char *data;
 #ifdef TA_DEBUG
+	unsigned char *data;
 	if (uv)
 		data = LM_CALLOC(width * height, 3);
 #endif
-	
+
 	int y = spacing;
 	int ch = entries[0].h;
 	int processed;
 	int flipped = 0;
-	int *wave = LM_CALLOC(height, sizeof(int));
+	int *waves[2];
+	waves[0] = LM_CALLOC(2 * height, sizeof(int));
+	waves[1] = waves[0] + height;
 	for (int i = 0; i < height; i++)
-		wave[i] = spacing;
+	{
+		waves[0][i] = width - 1;
+		waves[1][i] = spacing;
+	}
 	int pass = 0;
 	const int passes = 10;
 	for (processed = 0; processed < count / 3; processed++)
@@ -175,8 +193,8 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		if (flipped)
 		{
 			int yf = y + ch - e->h;
-			int x      = ta_wave_wash_up(wave, height, yf + e->h, e->x       , yf, spacing);
-			int xHflip = ta_wave_wash_up(wave, height, yf + e->h, e->w - e->x, yf, spacing);
+			int x      = ta_wave_wash_up(waves[1], 1, height, yf + e->h, e->x       , yf, spacing);
+			int xHflip = ta_wave_wash_up(waves[1], 1, height, yf + e->h, e->w - e->x, yf, spacing);
 			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
 			{
 				x = xHflip;
@@ -198,9 +216,13 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 					else
 						goto finish;
 				}
-				x = ta_wave_wash_up(wave, height, yf + e->h, e->x       , yf, spacing);
+				if (pass & 1)
+					x = ta_wave_wash_up(waves[1], 1, height, yf + e->h, e->x, yf, spacing);
+				else
+					x = spacing;
 			}
-			ta_wave_surge(wave, x + e->x + spacing + 1, yf, x + e->w + spacing + 1, yf + e->h);
+			ta_wave_surge(waves[0], 0, x, yf + e->h, x + e->x, yf); // left side
+			ta_wave_surge(waves[1], 1, x + e->x + spacing + 1, yf, x + e->w + spacing + 1, yf + e->h); // right side
 
 			if (uv)
 			{
@@ -223,8 +245,8 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 		}
 		else
 		{
-			int x      = ta_wave_wash_up(wave, height, y, e->x       , y + e->h, spacing);
-			int xHflip = ta_wave_wash_up(wave, height, y, e->w - e->x, y + e->h, spacing);
+			int x      = ta_wave_wash_up(waves[1], 1, height, y, e->x       , y + e->h, spacing);
+			int xHflip = ta_wave_wash_up(waves[1], 1, height, y, e->w - e->x, y + e->h, spacing);
 			if (xHflip < x || (xHflip == x && e->x > e->w / 2))
 			{
 				x = xHflip;
@@ -242,9 +264,13 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 					else
 						goto finish;
 				}
-				x = ta_wave_wash_up(wave, height, y, e->x       , y + e->h, spacing);
+				if (pass & 1)
+					x = ta_wave_wash_up(waves[1], 1, height, y, e->x, y + e->h, spacing);
+				else
+					x = spacing;
 			}
-			ta_wave_surge(wave, x + e->x + spacing + 1, y + e->h, x + e->w + spacing + 1, y);
+			ta_wave_surge(waves[0], 0, x, y, x + e->x, y + e->h); // left side
+			ta_wave_surge(waves[1], 1, x + e->x + spacing + 1, y + e->h, x + e->w + spacing + 1, y); // right side
 
 			if (uv)
 			{
@@ -274,7 +300,12 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	{
 		for (int i = 0; i < height; i++)
 		{
-			int x = wave[i] - spacing;
+			// left
+			int x = waves[0][i];// +spacing;
+			while (x >= 0)
+				data[(i * width + x--) * 3 + 2] = 255;
+			// right
+			x = waves[1][i] - spacing;
 			while (x < width)
 				data[(i * width + x++) * 3] = 255;
 		}
@@ -284,7 +315,7 @@ static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, fl
 	}
 #endif
 
-	LM_FREE(wave);
+	LM_FREE(waves[0]);
 	LM_FREE(entries);
 	
 	return processed * 3;
