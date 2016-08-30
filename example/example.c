@@ -6,6 +6,10 @@
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
 
+#define TRIANGLEPACKER_IMPLEMENTATION
+#define TP_DEBUG_OUTPUT
+#include "trianglepacker/trianglepacker.h"
+
 #define LIGHTMAPPER_IMPLEMENTATION
 #define LM_DEBUG_INTERPOLATION
 #include "../lightmapper.h"
@@ -35,306 +39,7 @@ static int initScene(lm_scene *scene);
 static void drawScene(lm_scene *scene, float *view, float *projection);
 static void destroyScene(lm_scene *scene);
 
-
-#define TA_DEBUG
-
-typedef struct
-{
-	int Aindex;
-	short w, x, h, hflip;
-	//       C           -
-	//     * |  *        | h
-	//   *   |     *     |
-	// B-----+--------A  -
-	// '--x--'
-	// '-------w------'
-} ta_entry;
-
-static int ta_entry_cmp(const void *a, const void *b)
-{
-	ta_entry *ea = (ta_entry*)a;
-	ta_entry *eb = (ta_entry*)b;
-	int dh = eb->h - ea->h;
-	return dh != 0 ? dh : (eb->w - ea->w);
-}
-
-#ifdef TA_DEBUG
-static void ta_line(unsigned char *data, int w, int h,
-                    int x0, int y0, int x1, int y1,
-                    unsigned char r, unsigned char g, unsigned char b)
-{
-	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
-	int err = (dx > dy ? dx : -dy) / 2, e2;
-	for(;;)
-	{
-		unsigned char *p = data + (y0 * w + x0) * 3;
-		p[0] = r; p[1] = g; p[2] = b;
-
-		if (x0 == x1 && y0 == y1) break;
-		e2 = err;
-		if (e2 > -dx) { err -= dy; x0 += sx; }
-		if (e2 <  dy) { err += dx; y0 += sy; }
-	}
-}
-#endif
-
-static void ta_wave_surge(int *wave, int right, int x0, int y0, int x1, int y1)
-{
-	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
-	int err = (dx > dy ? dx : -dy) / 2, e2;
-	for(;;)
-	{
-		if (right)
-			wave[y0] = x0 > wave[y0] ? x0 : wave[y0];
-		else
-			wave[y0] = x0 < wave[y0] ? x0 : wave[y0];
-		if (x0 == x1 && y0 == y1) break;
-		e2 = err;
-		if (e2 > -dx) { err -= dy; x0 += sx; }
-		if (e2 <  dy) { err += dx; y0 += sy; }
-	}
-}
-
-static int ta_wave_wash_up(int *wave, int right, int height, int y0, int x1, int y1, int spacing)
-{
-	int x0 = 0;
-	int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-	int dy = abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
-	int err = (dx > dy ? dx : -dy) / 2, e2;
-	int x = wave[y0];
-	for(;;)
-	{
-		int xDistance = wave[y0] - x0 - x;
-		for (int y = lm_maxi(y0 - spacing, 0); y <= lm_mini(y0 + spacing, height - 1); y++)
-			xDistance = right ? lm_maxi(wave[y] - x0 - x, xDistance) : lm_mini(wave[y] - x0 - x, xDistance);
-		if ((right && xDistance > 0) || (!right && xDistance < 0))
-			x += xDistance;
-		if (x0 == x1 && y0 == y1) break;
-		e2 = err;
-		if (e2 > -dx) { err -= dy; x0 += sx; }
-		if (e2 <  dy) { err += dx; y0 += sy; }
-	}
-	return x;
-}
-
-static int ta_pack(lm_vec3 *p, int count, int width, int height, int spacing, float scale, lm_vec2 *uv)
-{
-	ta_entry *entries = LM_CALLOC(count / 3, sizeof(ta_entry));
-	for (int i = 0; i < count / 3; i++)
-	{
-		lm_vec3 tp[3], tv[3];
-		tp[0] = lm_scale3(p[i * 3 + 0], scale);
-		tp[1] = lm_scale3(p[i * 3 + 1], scale);
-		tp[2] = lm_scale3(p[i * 3 + 2], scale);
-		tv[0] = lm_sub3(tp[1], tp[0]);
-		tv[1] = lm_sub3(tp[2], tp[1]);
-		tv[2] = lm_sub3(tp[0], tp[2]);
-		float tvlsq[3] = { lm_length3sq(tv[0]), lm_length3sq(tv[1]), lm_length3sq(tv[2]) };
-
-		// find long edge
-		int maxi;        float maxl = tvlsq[0]; maxi = 0;
-		if (tvlsq[1] > maxl) { maxl = tvlsq[1]; maxi = 1; }
-		if (tvlsq[2] > maxl) { maxl = tvlsq[2]; maxi = 2; }
-		int nexti = (maxi + 1) % 3;
-
-		// measure triangle
-		float w = sqrtf(maxl);
-		float x = -lm_dot3(tv[maxi], tv[nexti]) / w;
-		float h = lm_length3(lm_sub3(lm_add3(tv[maxi], tv[nexti]), lm_scale3(lm_normalize3(tv[maxi]), w - x)));
-
-		// store entry
-		ta_entry *e = entries + i;
-		e->Aindex = i * 3 + maxi;
-		e->w = (int)ceilf(w);
-		e->x = (int)ceilf(x);
-		e->h = (int)ceilf(h);
-		e->hflip = 0;
-	}
-	qsort(entries, count / 3, sizeof(ta_entry), ta_entry_cmp);
-
-	lm_vec2 uvScale = lm_v2(1.0f / width, 1.0f / height);
-
-#ifdef TA_DEBUG
-	unsigned char *data;
-	if (uv)
-		data = LM_CALLOC(width * height, 3);
-#endif
-
-	int processed;
-	int *waves[2];
-	waves[0] = LM_CALLOC(2 * height, sizeof(int));
-	waves[1] = waves[0] + height;
-	for (int i = 0; i < height; i++)
-	{
-		waves[0][i] = width - 1;
-		waves[1][i] = spacing;
-	}
-	int pass = 0;
-
-	int row_y = spacing;
-	int row_h = entries[0].h;
-	int vflip = 0;
-	for (processed = 0; processed < count / 3; processed++)
-	{
-		ta_entry *e = entries + processed;
-		int ymin, ystart, yend, xmin[2], x, hflip;
-retry:
-		ymin = vflip ? row_y + row_h - e->h : row_y;
-		ystart = vflip ? ymin + e->h : ymin;
-		yend = vflip ? ymin : ymin + e->h;
-
-		if (pass < 3) // left to right (first three passes)
-		{
-			hflip = processed & 1;
-			xmin[0] = ta_wave_wash_up(waves[1], 1, height, ystart,        e->x, yend, spacing);
-			xmin[1] = ta_wave_wash_up(waves[1], 1, height, ystart, e->w - e->x, yend, spacing); // flipped horizontally
-
-			//hflip = (xmin[1] < xmin[0] || (xmin[1] == xmin[0] && e->x > e->w / 2)) ? 1 : 0;
-			e->x = hflip ? e->w - e->x : e->x;
-			e->hflip ^= hflip;
-			x = xmin[hflip];
-
-			if (x + e->w + spacing > width)
-			{
-				// next row
-				row_y += row_h + spacing + 1;
-				row_h = e->h;
-				if (row_y + row_h + spacing > height)
-				{
-					++pass; // next pass
-					row_y = spacing;
-				}
-				goto retry;
-			}
-		}
-		else if (pass < 5) // right to left (last two passes)
-		{
-			hflip = processed & 1;
-			xmin[0] = ta_wave_wash_up(waves[0], 0, height, ystart, e->w - e->x, yend, spacing);
-			xmin[1] = ta_wave_wash_up(waves[0], 0, height, ystart,        e->x, yend, spacing); // flipped horizontally
-
-			//hflip = (xmin[1] > xmin[0] || (xmin[1] == xmin[0] && e->x < e->w / 2)) ? 1 : 0;
-			e->x = hflip ? e->w - e->x : e->x;
-			e->hflip ^= hflip;
-			x = xmin[hflip] - e->w;// -spacing;
-			if (x < spacing)
-			{
-				// next row
-				row_y += row_h + spacing + 1;
-				row_h = e->h;
-				if (row_y + row_h + spacing > height)
-				{
-					++pass; // next pass
-					row_y = spacing;
-				}
-				goto retry;
-			}
-		}
-		else
-			goto finish;
-
-		ta_wave_surge(waves[0], 0, x        - spacing - 1, ystart, x + e->x - spacing - 1, yend); // left side
-		ta_wave_surge(waves[1], 1, x + e->w + spacing + 1, ystart, x + e->x + spacing + 1, yend); // right side
-
-		// calc & store UVs
-		if (uv)
-		{
-#ifdef TA_DEBUG
-			ta_line(data, width, height, x       , ystart, x + e->w, ystart, 255, 255, 255);
-			ta_line(data, width, height, x       , ystart, x + e->x, yend  , 255, 255, 255);
-			ta_line(data, width, height, x + e->w, ystart, x + e->x, yend  , 255, 255, 255);
-#endif
-			int tri = e->Aindex - (e->Aindex % 3);
-			int Ai = e->Aindex;
-			int Bi = tri + ((e->Aindex + 1) % 3);
-			int Ci = tri + ((e->Aindex + 2) % 3);
-			if (e->hflip) LM_SWAP(int, Ai, Bi);
-			uv[Ai] = lm_mul2(lm_v2i(x + e->w, ystart), uvScale);
-			uv[Bi] = lm_mul2(lm_v2i(x       , ystart), uvScale);
-			uv[Ci] = lm_mul2(lm_v2i(x + e->x, yend  ), uvScale);
-		}
-		vflip = !vflip;
-	}
-
-finish:
-#ifdef TA_DEBUG
-	if (uv)
-	{
-		/*for (int i = 0; i < height; i++)
-		{
-			// left
-			int x = waves[0][i];// +spacing;
-			while (x >= 0)
-				data[(i * width + x--) * 3 + 2] = 255;
-			// right
-			x = waves[1][i] - spacing;
-			while (x < width)
-				data[(i * width + x++) * 3] = 255;
-		}*/
-		if (lmImageSaveTGAub("debug_triangle_packing.tga", data, width, height, 3))
-			printf("Saved debug_triangle_packing.tga\n");
-		LM_FREE(data);
-	}
-#endif
-
-	LM_FREE(waves[0]);
-	LM_FREE(entries);
-	
-	return processed * 3;
-}
-
-static int ta_pack_to_size(lm_vec3 *p, int count, int width, int height, int spacing, lm_vec2 *uv, float *scale)
-{
-	float testScale = 1.0f;
-	int processed = ta_pack(p, count, width, height, spacing, testScale, 0);
-	int increase = processed < count ? 0 : 1;
-	float lastFitScale = 0.0f;
-	float multiplicator = 0.5f;
-
-	if (increase)
-	{
-		while (!(processed < count))
-		{
-			testScale *= 2.0f;
-			//printf("inc testing scale %f\n", testScale);
-			processed = ta_pack(p, count, width, height, spacing, testScale, 0);
-		}
-		lastFitScale = testScale / 2.0f;
-		//printf("inc scale %f fits\n", lastFitScale);
-		multiplicator = 0.75f;
-	}
-
-	for (int j = 0; j < 16; j++)
-	{
-		//printf("dec multiplicator %f\n", multiplicator);
-		for (int i = 0; processed < count && i < 2; i++)
-		{
-			testScale *= multiplicator;
-			//printf("dec testing scale %f\n", testScale);
-			processed = ta_pack(p, count, width, height, spacing, testScale, 0);
-		}
-		if (!(processed < count))
-		{
-			processed = 0;
-			//printf("scale %f fits\n", testScale);
-			lastFitScale = testScale;
-			testScale /= multiplicator;
-			multiplicator = (multiplicator + 1.0f) * 0.5f;
-		}
-	}
-	if (lastFitScale > 0.0f)
-	{
-		*scale = lastFitScale;
-		processed = ta_pack(p, count, width, height, spacing, lastFitScale, uv);
-		assert(processed == count);
-		return 1;
-	}
-	return 0;
-}
-
-static void ta_float_line(float *data, int w, int h, int c, lm_vec2 p0, lm_vec2 p1, float r, float g, float b)
+/*static void tp_float_line(float *data, int w, int h, int c, lm_vec2 p0, lm_vec2 p1, float r, float g, float b)
 {
 	int x0 = (int)(p0.x * w);
 	int y0 = (int)(p0.y * h);
@@ -355,10 +60,10 @@ static void ta_float_line(float *data, int w, int h, int c, lm_vec2 p0, lm_vec2 
 	}
 }
 
-static void ta_smooth_edge(lm_vec2 a0, lm_vec2 a1, lm_vec2 b0, lm_vec2 b1, float *data, int w, int h, int c)
+static void tp_smooth_edge(lm_vec2 a0, lm_vec2 a1, lm_vec2 b0, lm_vec2 b1, float *data, int w, int h, int c)
 {
-	//ta_float_line(data, w, h, c, a0, b0, 1.0f, 0.0f, 0.0f);
-	//ta_float_line(data, w, h, c, a1, b1, 0.0f, 1.0f, 0.0f);
+	//tp_float_line(data, w, h, c, a0, b0, 1.0f, 0.0f, 0.0f);
+	//tp_float_line(data, w, h, c, a1, b1, 0.0f, 1.0f, 0.0f);
 	lm_vec2 s = lm_v2i(w, h);
 	a0 = lm_mul2(a0, s);
 	a1 = lm_mul2(a1, s);
@@ -389,14 +94,14 @@ static void ta_smooth_edge(lm_vec2 a0, lm_vec2 a1, lm_vec2 b0, lm_vec2 b1, float
 	}
 }
 
-static int ta_should_smooth(lm_vec3 *tria, lm_vec3 *trib)
+static int tp_should_smooth(lm_vec3 *tria, lm_vec3 *trib)
 {
 	lm_vec3 n0 = lm_normalize3(lm_cross3(lm_sub3(tria[1], tria[0]), lm_sub3(tria[2], tria[0])));
 	lm_vec3 n1 = lm_normalize3(lm_cross3(lm_sub3(trib[1], trib[0]), lm_sub3(trib[2], trib[0])));
 	return lm_absf(lm_dot3(n0, n1)) > 0.5f; // TODO: make threshold an argument!
 }
 
-static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices, float *data, int w, int h, int c)
+static void tp_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices, float *data, int w, int h, int c)
 {
 	lm_vec3 bbmin = lm_v3(FLT_MAX, FLT_MAX, FLT_MAX);
 	lm_vec3 bbmax = lm_v3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
@@ -421,25 +126,25 @@ static void ta_smooth_edges(lm_vec3 *positions, lm_vec2 *texcoords, int vertices
 		while (hashmap[hash] >= 0)
 		{
 			int oi0 = hashmap[hash];
-#define TA_EQUAL(a, b) lm_length3sq(lm_sub3(positions[a], positions[b])) < 0.00001f
-			if (TA_EQUAL(oi0, i0))
+#define TP_EQUAL(a, b) lm_length3sq(lm_sub3(positions[a], positions[b])) < 0.00001f
+			if (TP_EQUAL(oi0, i0))
 			{
 				int otri = oi0 - (oi0 % 3);
 				int oi1 = otri + ((oi0 + 1) % 3);
 				int oi2 = otri + ((oi0 + 2) % 3);
-				if (TA_EQUAL(oi1, i1) && ta_should_smooth(positions + tri, positions + otri))
-					ta_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi1], data, w, h, c);
-				//else if (TA_EQUAL(oi1, i2) && ta_should_smooth(positions + tri, positions + otri))
-				//	ta_smooth_edge(texcoords[i0], texcoords[i2], texcoords[oi0], texcoords[oi1], data, w, h, c);
-				else if (TA_EQUAL(oi2, i1) && ta_should_smooth(positions + tri, positions + otri))
-					ta_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi2], data, w, h, c);
+				if (TP_EQUAL(oi1, i1) && tp_should_smooth(positions + tri, positions + otri))
+					tp_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi1], data, w, h, c);
+				//else if (TP_EQUAL(oi1, i2) && tp_should_smooth(positions + tri, positions + otri))
+				//	tp_smooth_edge(texcoords[i0], texcoords[i2], texcoords[oi0], texcoords[oi1], data, w, h, c);
+				else if (TP_EQUAL(oi2, i1) && tp_should_smooth(positions + tri, positions + otri))
+					tp_smooth_edge(texcoords[i0], texcoords[i1], texcoords[oi0], texcoords[oi2], data, w, h, c);
 			}
 			if (++hash == vertices * 2)
 				hash = 0;
 		}
 		hashmap[hash] = i0;
 	}
-}
+}*/
 
 static void injectDirectLighting(lm_scene *scene)
 {
@@ -515,7 +220,7 @@ static int bake(lm_scene *scene)
 	float *temp = calloc(w * h * 4, sizeof(float));
 	for (int i = 0; i < 1; i++)
 	{
-		//ta_smooth_edges(scene->positions, scene->texcoords, scene->vertices, data, w, h, 4);
+		//tp_smooth_edges(scene->positions, scene->texcoords, scene->vertices, data, w, h, 4);
 	}
 	lmImageSmooth(data, temp, w, h, 4);
 	lmImageDilate(temp, data, w, h, 4);
@@ -653,7 +358,7 @@ static int initScene(lm_scene *scene)
 	scene->w = 1024;
 	scene->h = 1024;
 	float scale = 0.0f;
-	int success = ta_pack_to_size(scene->positions, scene->vertices, scene->w, scene->h, 2, scene->texcoords, &scale);
+	int success = tpPackIntoRect((float*)scene->positions, scene->vertices, scene->w, scene->h, 0, 2, (float*)scene->texcoords, &scale);
 	if (!success)
 	{
 		fprintf(stderr, "Could not pack all triangles into the lightmap!\n");
