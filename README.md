@@ -104,7 +104,15 @@ This image shows which texels get rendered (red) and which get interpolated (gre
 
 This technique is also described by Hugo Elias over [here](http://web.archive.org/web/20160311085440/http://freespace.virgin.net/hugo.elias/radiosity/radiosity.htm).
 
-# Example images
+# Example media
+The following video shows several lighting effects. The static/stationary and indirect lighting were precomputed with lightmapper.h:
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=ukiTqj8JBKY">
+    <img width="100%" src="https://img.youtube.com/vi/ukiTqj8JBKY/0.jpg" alt="Showing Some Editor Features (Master Thesis)"/>
+  </a>
+</p>
+
 ![Sphere Light](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_light.png)
 ![Skybox](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_skybox.png)
 ![Shadows and Reflections](https://github.com/ands/lightmapper/raw/master/example_images/gazebo_shadows_reflections.png)
