@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 23.07.2016 *
+* author: Andreas Mantler (ands) | last change: 30.04.2018 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -10,9 +10,6 @@
 * you are granted a perpetual, irrevocable license to copy *
 * and modify this file however you want.                   *
 ***********************************************************/
-
-// TODO: accept different primitive types?
-// TODO: maybe load the modern opengl calls? check version/extensions?
 
 #ifndef LIGHTMAPPER_H
 #define LIGHTMAPPER_H
@@ -49,11 +46,15 @@ lm_context *lmCreate(
 	int hemisphereSize,                                                                                // hemisphereSize: resolution of the hemisphere renderings. must be a power of two! typical: 64.
 	float zNear, float zFar,                                                                           // zNear/zFar: hemisphere min/max draw distances.
 	float clearR, float clearG, float clearB,                                                          // clear color / background color / sky color.
-	int interpolationPasses, float interpolationThreshold);                                            // passes: hierarchical selective interpolation passes (0-8; initial step size = 2^passes).
-                                                                                                       // threshold: error value below which lightmap pixels are interpolated instead of rendered.
-                                                                                                       // use output image from LM_DEBUG_INTERPOLATION to determine a good value.
-                                                                                                       // values around and below 0.01 are probably ok.
-                                                                                                       // the lower the value, the more hemispheres are rendered -> slower, but possibly better quality.
+	int interpolationPasses, float interpolationThreshold,                                             // passes: hierarchical selective interpolation passes (0-8; initial step size = 2^passes).
+	                                                                                                   // threshold: error value below which lightmap pixels are interpolated instead of rendered.
+	                                                                                                   // use output image from LM_DEBUG_INTERPOLATION to determine a good value.
+	                                                                                                   // values around and below 0.01 are probably ok.
+	                                                                                                   // the lower the value, the more hemispheres are rendered -> slower, but possibly better quality.
+	float cameraToSurfaceDistanceModifier LM_DEFAULT_VALUE(0.0f));                                     // modifier for the height of the rendered hemispheres above the surface
+	                                                                                                   // -1.0f => stick to surface, 0.0f => minimum height for interpolated surface normals,
+	                                                                                                   // > 0.0f => improves gradients on surfaces with interpolated normals due to the flat surface horizon,
+	                                                                                                   // but may introduce other artifacts.
 
 // optional: set material characteristics by specifying cos(theta)-dependent weights for incoming light.
 typedef float (*lm_weight_func)(float cos_theta, void *userdata);
@@ -66,6 +67,7 @@ void lmSetTargetLightmap(lm_context *ctx, float *outLightmap, int w, int h, int 
 void lmSetGeometry(lm_context *ctx,
 	const float *transformationMatrix,                                                                 // 4x4 object-to-world transform for the geometry or NULL (no transformation).
 	lm_type positionsType, const void *positionsXYZ, int positionsStride,                              // triangle mesh in object space.
+	lm_type normalsType, const void *normalsXYZ, int normalsStride,                                    // optional normals for the mesh in object space (Use LM_NONE type in case you only need flat surfaces).
 	lm_type lightmapCoordsType, const void *lightmapCoordsUV, int lightmapCoordsStride,                // lightmap atlas texture coordinates for the mesh [0..1]x[0..1] (integer types are normalized to 0..1 range).
 	int count, lm_type indicesType LM_DEFAULT_VALUE(LM_NONE), const void *indices LM_DEFAULT_VALUE(0));// if mesh indices are used, count = number of indices else count = number of vertices.
 
@@ -117,7 +119,7 @@ lm_bool lmImageSaveTGAf(const char *filename, const float *image, int w, int h, 
 
 #define LM_SWAP(type, a, b) { type tmp = (a); (a) = (b); (b) = tmp; }
 
-#if defined(_MSC_VER) && !defined(__cplusplus) // TODO: specific versions only?
+#if defined(_MSC_VER) && !defined(__cplusplus)
 #define inline __inline
 #endif
 
@@ -133,6 +135,7 @@ static inline int      lm_absi      (int     a           ) { return a < 0 ? -a :
 static inline float    lm_minf      (float   a, float   b) { return a < b ? a : b; }
 static inline float    lm_maxf      (float   a, float   b) { return a > b ? a : b; }
 static inline float    lm_absf      (float   a           ) { return a < 0.0f ? -a : a; }
+static inline float    lm_pmodf     (float   a, float   b) { return (a < 0.0f ? 1.0f : 0.0f) + (float)fmod(a, b); } // positive mod
 
 typedef struct lm_ivec2 { int x, y; } lm_ivec2;
 static inline lm_ivec2 lm_i2        (int     x, int     y) { lm_ivec2 v = { x, y }; return v; }
@@ -146,8 +149,10 @@ static inline lm_vec2  lm_sub2      (lm_vec2 a, lm_vec2 b) { return lm_v2(a.x - 
 static inline lm_vec2  lm_mul2      (lm_vec2 a, lm_vec2 b) { return lm_v2(a.x * b.x, a.y * b.y); }
 static inline lm_vec2  lm_scale2    (lm_vec2 a, float   b) { return lm_v2(a.x * b, a.y * b); }
 static inline lm_vec2  lm_div2      (lm_vec2 a, float   b) { return lm_scale2(a, 1.0f / b); }
+static inline lm_vec2  lm_pmod2     (lm_vec2 a, float   b) { return lm_v2(lm_pmodf(a.x, b), lm_pmodf(a.y, b)); }
 static inline lm_vec2  lm_min2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_minf(a.x, b.x), lm_minf(a.y, b.y)); }
 static inline lm_vec2  lm_max2      (lm_vec2 a, lm_vec2 b) { return lm_v2(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y)); }
+static inline lm_vec2  lm_abs2      (lm_vec2 a           ) { return lm_v2(lm_absf(a.x), lm_absf(a.y)); }
 static inline lm_vec2  lm_floor2    (lm_vec2 a           ) { return lm_v2(floorf(a.x), floorf(a.y)); }
 static inline lm_vec2  lm_ceil2     (lm_vec2 a           ) { return lm_v2(ceilf (a.x), ceilf (a.y)); }
 static inline float    lm_dot2      (lm_vec2 a, lm_vec2 b) { return a.x * b.x + a.y * b.y; }
@@ -165,8 +170,10 @@ static inline lm_vec3  lm_sub3      (lm_vec3 a, lm_vec3 b) { return lm_v3(a.x - 
 static inline lm_vec3  lm_mul3      (lm_vec3 a, lm_vec3 b) { return lm_v3(a.x * b.x, a.y * b.y, a.z * b.z); }
 static inline lm_vec3  lm_scale3    (lm_vec3 a, float   b) { return lm_v3(a.x * b, a.y * b, a.z * b); }
 static inline lm_vec3  lm_div3      (lm_vec3 a, float   b) { return lm_scale3(a, 1.0f / b); }
+static inline lm_vec3  lm_pmod3     (lm_vec3 a, float   b) { return lm_v3(lm_pmodf(a.x, b), lm_pmodf(a.y, b), lm_pmodf(a.z, b)); }
 static inline lm_vec3  lm_min3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_minf(a.x, b.x), lm_minf(a.y, b.y), lm_minf(a.z, b.z)); }
 static inline lm_vec3  lm_max3      (lm_vec3 a, lm_vec3 b) { return lm_v3(lm_maxf(a.x, b.x), lm_maxf(a.y, b.y), lm_maxf(a.z, b.z)); }
+static inline lm_vec3  lm_abs3      (lm_vec3 a           ) { return lm_v3(lm_absf(a.x), lm_absf(a.y), lm_absf(a.z)); }
 static inline lm_vec3  lm_floor3    (lm_vec3 a           ) { return lm_v3(floorf(a.x), floorf(a.y), floorf(a.z)); }
 static inline lm_vec3  lm_ceil3     (lm_vec3 a           ) { return lm_v3(ceilf (a.x), ceilf (a.y), ceilf (a.z)); }
 static inline float    lm_dot3      (lm_vec3 a, lm_vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
@@ -256,10 +263,15 @@ struct lm_context
 {
 	struct
 	{
-		const float *transform;
+		const float *modelMatrix;
+		float normalMatrix[9];
+
 		const unsigned char *positions;
 		lm_type positionsType;
 		int positionsStride;
+		const unsigned char *normals;
+		lm_type normalsType;
+		int normalsStride;
 		const unsigned char *uvs;
 		lm_type uvsType;
 		int uvsStride;
@@ -277,6 +289,7 @@ struct lm_context
 		{
 			unsigned int baseIndex;
 			lm_vec3 p[3];
+			lm_vec3 n[3];
 			lm_vec2 uv[3];
 		} triangle;
 
@@ -316,6 +329,7 @@ struct lm_context
 	{
 		unsigned int size;
 		float zNear, zFar;
+		float cameraToSurfaceDistanceModifier;
 		struct { float r, g, b; } clearColor;
 
 		unsigned int fbHemiCountX;
@@ -340,11 +354,10 @@ struct lm_context
 		} downsamplePass;
 		struct
 		{
-			GLuint pbo;
-			lm_bool pboTransferStarted;
-			unsigned int fbHemiCount;
-			lm_ivec2 *fbHemiToLightmapLocation;
-		} transfer;
+			GLuint texture;
+			lm_ivec2 writePosition;
+			lm_ivec2 *toLightmapLocation;
+		} storage;
 	} hemisphere;
 
 	float interpolationThreshold;
@@ -415,6 +428,13 @@ static void lm_setLightmapPixel(lm_context *ctx, int x, int y, float *in)
 		*p++ = *in++;
 }
 
+#define lm_baseAngle 0.1f
+static const float lm_baseAngles[3][3] = {
+	{ lm_baseAngle, lm_baseAngle + 1.0f / 3.0f, lm_baseAngle + 2.0f / 3.0f },
+	{ lm_baseAngle + 1.0f / 3.0f, lm_baseAngle + 2.0f / 3.0f, lm_baseAngle },
+	{ lm_baseAngle + 2.0f / 3.0f, lm_baseAngle, lm_baseAngle + 1.0f / 3.0f }
+};
+
 static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *ctx)
 {
 	if (lm_hasConservativeTriangleRasterizerFinished(ctx))
@@ -426,7 +446,43 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		if (pixelValue[j] != 0.0f)
 			return LM_FALSE;
 
-	// try to interpolate from neighbors:
+	// try calculating centroid by clipping the pixel against the triangle
+	lm_vec2 pixel[16];
+	pixel[0] = lm_v2i(ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y);
+	pixel[1] = lm_v2i(ctx->meshPosition.rasterizer.x + 1, ctx->meshPosition.rasterizer.y);
+	pixel[2] = lm_v2i(ctx->meshPosition.rasterizer.x + 1, ctx->meshPosition.rasterizer.y + 1);
+	pixel[3] = lm_v2i(ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y + 1);
+
+	lm_vec2 res[16];
+	int nRes = lm_convexClip(pixel, 4, ctx->meshPosition.triangle.uv, 3, res);
+	if (nRes == 0)
+		return LM_FALSE; // nothing left
+
+	// calculate centroid position and area
+	lm_vec2 centroid = res[0];
+	float area = res[nRes - 1].x * res[0].y - res[nRes - 1].y * res[0].x;
+	for (int i = 1; i < nRes; i++)
+	{
+		centroid = lm_add2(centroid, res[i]);
+		area += res[i - 1].x * res[i].y - res[i - 1].y * res[i].x;
+	}
+	centroid = lm_div2(centroid, (float)nRes);
+	area = lm_absf(area / 2.0f);
+
+	if (area <= 0.0f)
+		return LM_FALSE; // no area left
+
+	// calculate barycentric coords
+	lm_vec2 uv = lm_toBarycentric(
+		ctx->meshPosition.triangle.uv[0],
+		ctx->meshPosition.triangle.uv[1],
+		ctx->meshPosition.triangle.uv[2],
+		centroid);
+
+	if (!lm_finite2(uv))
+		return LM_FALSE; // degenerate
+
+	// try to interpolate color from neighbors:
 	if (ctx->meshPosition.pass > 0)
 	{
 		float *neighbors[4];
@@ -496,76 +552,49 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		}
 	}
 
-	// could not interpolate. must render a hemisphere:
-	lm_vec2 pixel[16];
-	pixel[0] = lm_v2i(ctx->meshPosition.rasterizer.x    , ctx->meshPosition.rasterizer.y    );
-	pixel[1] = lm_v2i(ctx->meshPosition.rasterizer.x + 1, ctx->meshPosition.rasterizer.y    );
-	pixel[2] = lm_v2i(ctx->meshPosition.rasterizer.x + 1, ctx->meshPosition.rasterizer.y + 1);
-	pixel[3] = lm_v2i(ctx->meshPosition.rasterizer.x    , ctx->meshPosition.rasterizer.y + 1);
+	// could not interpolate. must render a hemisphere.
+	// calculate 3D sample position and orientation
+	lm_vec3 p0 = ctx->meshPosition.triangle.p[0];
+	lm_vec3 p1 = ctx->meshPosition.triangle.p[1];
+	lm_vec3 p2 = ctx->meshPosition.triangle.p[2];
+	lm_vec3 v1 = lm_sub3(p1, p0);
+	lm_vec3 v2 = lm_sub3(p2, p0);
+	ctx->meshPosition.sample.position = lm_add3(p0, lm_add3(lm_scale3(v2, uv.x), lm_scale3(v1, uv.y)));
 
-	lm_vec2 res[16];
-	int nRes = lm_convexClip(pixel, 4, ctx->meshPosition.triangle.uv, 3, res);
-	if (nRes > 0)
-	{
-		// do centroid sampling
-		lm_vec2 centroid = res[0];
-		float area = res[nRes - 1].x * res[0].y - res[nRes - 1].y * res[0].x;
-		for (int i = 1; i < nRes; i++)
-		{
-			centroid = lm_add2(centroid, res[i]);
-			area += res[i - 1].x * res[i].y - res[i - 1].y * res[i].x;
-		}
-		centroid = lm_div2(centroid, (float)nRes);
-		area = lm_absf(area / 2.0f);
+	lm_vec3 n0 = ctx->meshPosition.triangle.n[0];
+	lm_vec3 n1 = ctx->meshPosition.triangle.n[1];
+	lm_vec3 n2 = ctx->meshPosition.triangle.n[2];
+	lm_vec3 nv1 = lm_sub3(n1, n0);
+	lm_vec3 nv2 = lm_sub3(n2, n0);
+	ctx->meshPosition.sample.direction = lm_normalize3(lm_add3(n0, lm_add3(lm_scale3(nv2, uv.x), lm_scale3(nv1, uv.y))));
+	ctx->meshPosition.sample.direction = lm_normalize3(ctx->meshPosition.sample.direction);
+	float cameraToSurfaceDistance = (1.0f + ctx->hemisphere.cameraToSurfaceDistanceModifier) * ctx->hemisphere.zNear * sqrtf(2.0f);
+	ctx->meshPosition.sample.position = lm_add3(ctx->meshPosition.sample.position, lm_scale3(ctx->meshPosition.sample.direction, cameraToSurfaceDistance));
 
-		if (area > 0.0f)
-		{
-			// calculate 3D sample position and orientation
-			lm_vec2 uv = lm_toBarycentric(
-				ctx->meshPosition.triangle.uv[0],
-				ctx->meshPosition.triangle.uv[1],
-				ctx->meshPosition.triangle.uv[2],
-				centroid);
+	if (!lm_finite3(ctx->meshPosition.sample.position) ||
+		!lm_finite3(ctx->meshPosition.sample.direction) ||
+		lm_length3sq(ctx->meshPosition.sample.direction) < 0.5f) // don't allow 0.0f. should always be ~1.0f
+		return LM_FALSE;
+	
+	lm_vec3 up = lm_v3(0.0f, 1.0f, 0.0f);
+	if (lm_absf(lm_dot3(up, ctx->meshPosition.sample.direction)) > 0.8f)
+		up = lm_v3(0.0f, 0.0f, 1.0f);
 
-			// sample it only if its's not degenerate
-			if (lm_finite2(uv))
-			{
-				lm_vec3 p0 = ctx->meshPosition.triangle.p[0];
-				lm_vec3 p1 = ctx->meshPosition.triangle.p[1];
-				lm_vec3 p2 = ctx->meshPosition.triangle.p[2];
-				lm_vec3 v1 = lm_sub3(p1, p0);
-				lm_vec3 v2 = lm_sub3(p2, p0);
-				ctx->meshPosition.sample.position = lm_add3(p0, lm_add3(lm_scale3(v2, uv.x), lm_scale3(v1, uv.y)));
-				ctx->meshPosition.sample.direction = lm_normalize3(lm_cross3(v1, v2));
-
-				if (lm_finite3(ctx->meshPosition.sample.position) &&
-					lm_finite3(ctx->meshPosition.sample.direction) &&
-					lm_length3sq(ctx->meshPosition.sample.direction) > 0.5f) // don't allow 0.0f. should always be ~1.0f
-				{
-					// randomize rotation
-					lm_vec3 up = lm_v3(0.0f, 1.0f, 0.0f);
-					if (lm_absf(lm_dot3(up, ctx->meshPosition.sample.direction)) > 0.8f)
-						up = lm_v3(0.0f, 0.0f, 1.0f);
-					lm_vec3 side = lm_normalize3(lm_cross3(up, ctx->meshPosition.sample.direction));
-					up = lm_normalize3(lm_cross3(side, ctx->meshPosition.sample.direction));
-					int rx = ctx->meshPosition.rasterizer.x % 3;
-					int ry = ctx->meshPosition.rasterizer.y % 3;
-					const float pi = 3.14159265358979f; // no c++ M_PI?
-					const float baseAngle = 0.03f * pi;
-					const float baseAngles[3][3] = {
-						{ baseAngle, baseAngle + 1.0f / 3.0f, baseAngle + 2.0f / 3.0f },
-						{ baseAngle + 1.0f / 3.0f, baseAngle + 2.0f / 3.0f, baseAngle },
-						{ baseAngle + 2.0f / 3.0f, baseAngle, baseAngle + 1.0f / 3.0f }
-					};
-					float phi = 2.0f * pi * baseAngles[ry][rx] + 0.1f * ((float)rand() / (float)RAND_MAX);
-					ctx->meshPosition.sample.up = lm_normalize3(lm_add3(lm_scale3(side, cosf(phi)), lm_scale3(up, sinf(phi))));
-
-					return LM_TRUE;
-				}
-			}
-		}
-	}
-	return LM_FALSE;
+#if 0
+	// triangle-consistent up vector
+	ctx->meshPosition.sample.up = lm_normalize3(lm_cross3(up, ctx->meshPosition.sample.direction));
+	return LM_TRUE;
+#else
+	// "randomized" rotation with pattern
+	lm_vec3 side = lm_normalize3(lm_cross3(up, ctx->meshPosition.sample.direction));
+	up = lm_normalize3(lm_cross3(side, ctx->meshPosition.sample.direction));
+	int rx = ctx->meshPosition.rasterizer.x % 3;
+	int ry = ctx->meshPosition.rasterizer.y % 3;
+	static const float lm_pi = 3.14159265358979f;
+	float phi = 2.0f * lm_pi * lm_baseAngles[ry][rx] + 0.1f * ((float)rand() / (float)RAND_MAX);
+	ctx->meshPosition.sample.up = lm_normalize3(lm_add3(lm_scale3(side, cosf(phi)), lm_scale3(up, sinf(phi))));
+	return LM_TRUE;
+#endif
 }
 
 // returns true if a sampling position was found and
@@ -587,7 +616,7 @@ static lm_bool lm_findNextConservativeTriangleRasterizerPosition(lm_context *ctx
 	return lm_findFirstConservativeTriangleRasterizerPosition(ctx);
 }
 
-static void lm_beginProcessHemisphereBatch(lm_context *ctx)
+static void lm_integrateHemisphereBatch(lm_context *ctx)
 {
 	if (!ctx->hemisphere.fbHemiIndex)
 		return; // nothing to do
@@ -601,6 +630,7 @@ static void lm_beginProcessHemisphereBatch(lm_context *ctx)
 	// weighted downsampling pass
 	int outHemiSize = ctx->hemisphere.size / 2;
 	glBindFramebuffer(GL_FRAMEBUFFER, ctx->hemisphere.fb[fbWrite]);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->hemisphere.fbTexture[fbWrite], 0);
 	glViewport(0, 0, outHemiSize * ctx->hemisphere.fbHemiCountX, outHemiSize * ctx->hemisphere.fbHemiCountY);
 	glUseProgram(ctx->hemisphere.firstPass.programID);
 	glUniform1i(ctx->hemisphere.firstPass.hemispheresTextureID, 0);
@@ -611,7 +641,7 @@ static void lm_beginProcessHemisphereBatch(lm_context *ctx)
 	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.firstPass.weightsTexture);
 	glActiveTexture(GL_TEXTURE0);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glBindTexture(GL_TEXTURE_2D, 0);
+	//glBindTexture(GL_TEXTURE_2D, 0);
 
 #if 0
 	// debug output
@@ -636,115 +666,104 @@ static void lm_beginProcessHemisphereBatch(lm_context *ctx)
 		glViewport(0, 0, outHemiSize * ctx->hemisphere.fbHemiCountX, outHemiSize * ctx->hemisphere.fbHemiCountY);
 		glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.fbTexture[fbRead]);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-		glBindTexture(GL_TEXTURE_2D, 0);
+		//glBindTexture(GL_TEXTURE_2D, 0);
 	}
 
-	if (fbWrite == 0) // copy to other fb if we end up in fb 0, so that fb 0 can be written to while the data is async transferred!
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		LM_SWAP(int, fbRead, fbWrite);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, ctx->hemisphere.fb[fbRead]);
-		glReadBuffer(GL_COLOR_ATTACHMENT0);
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ctx->hemisphere.fb[fbWrite]);
-		glDrawBuffer(GL_COLOR_ATTACHMENT0);
-		glBlitFramebuffer(
-			0, 0, ctx->hemisphere.fbHemiCountX, ctx->hemisphere.fbHemiCountY,
-			0, 0, ctx->hemisphere.fbHemiCountX, ctx->hemisphere.fbHemiCountY,
-			GL_COLOR_BUFFER_BIT, GL_NEAREST);
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-
-		glBindFramebuffer(GL_FRAMEBUFFER, ctx->hemisphere.fb[fbWrite]);
-	}
-
-	// start GPU->CPU transfer of downsampled hemispheres
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.transfer.pbo);
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, ctx->hemisphere.fb[1]);
-	glReadBuffer(GL_COLOR_ATTACHMENT0);
-	glClampColor(GL_CLAMP_READ_COLOR, GL_FALSE);
-	glReadPixels(0, 0, ctx->hemisphere.fbHemiCountX, ctx->hemisphere.fbHemiCountY, GL_RGBA, GL_FLOAT, 0);
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-	LM_SWAP(lm_ivec2*, ctx->hemisphere.transfer.fbHemiToLightmapLocation, ctx->hemisphere.fbHemiToLightmapLocation);
-	ctx->hemisphere.transfer.fbHemiCount = ctx->hemisphere.fbHemiIndex;
-	ctx->hemisphere.transfer.pboTransferStarted = LM_TRUE;
-
+	// copy results to storage texture
+	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.storage.texture);
+	glCopyTexSubImage2D(GL_TEXTURE_2D, 0,
+		ctx->hemisphere.storage.writePosition.x, ctx->hemisphere.storage.writePosition.y,
+		0, 0, ctx->hemisphere.fbHemiCountX, ctx->hemisphere.fbHemiCountY);
+	glBindTexture(GL_TEXTURE_2D, 0);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glBindVertexArray(0);
 	glEnable(GL_DEPTH_TEST);
 
+	// copy position mapping to storage
+	for (unsigned int y = 0; y < ctx->hemisphere.fbHemiCountY; y++)
+	{
+		int sy = ctx->hemisphere.storage.writePosition.y + y;
+		for (unsigned int x = 0; x < ctx->hemisphere.fbHemiCountX; x++)
+		{
+			int sx = ctx->hemisphere.storage.writePosition.x + x;
+			unsigned int hemiIndex = y * ctx->hemisphere.fbHemiCountX + x;
+			if (hemiIndex >= ctx->hemisphere.fbHemiIndex)
+				ctx->hemisphere.storage.toLightmapLocation[sy * ctx->lightmap.width + sx] = lm_i2(-1, -1);
+			else
+				ctx->hemisphere.storage.toLightmapLocation[sy * ctx->lightmap.width + sx] = ctx->hemisphere.fbHemiToLightmapLocation[hemiIndex];
+		}
+	}
+
+	// advance storage texture write position
+	ctx->hemisphere.storage.writePosition.x += ctx->hemisphere.fbHemiCountX;
+	if (ctx->hemisphere.storage.writePosition.x + (int)ctx->hemisphere.fbHemiCountX > ctx->lightmap.width)
+	{
+		ctx->hemisphere.storage.writePosition.x = 0;
+		ctx->hemisphere.storage.writePosition.y += ctx->hemisphere.fbHemiCountY;
+		assert(ctx->hemisphere.storage.writePosition.y + (int)ctx->hemisphere.fbHemiCountY < ctx->lightmap.height);
+	}
+
 	ctx->hemisphere.fbHemiIndex = 0;
 }
 
-static void lm_finishProcessHemisphereBatch(lm_context *ctx)
+static void lm_writeResultsToLightmap(lm_context *ctx)
 {
-	if (!ctx->hemisphere.transfer.pboTransferStarted)
-		return; // nothing to do
-
-	// finish the GPU->CPU transfer of downsampled hemispheres
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.transfer.pbo);
-	float *hemi = (float*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-	//float *hemi = (float*)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, ctx->hemisphere.transfer.fbHemiCount * 4 * sizeof(float), GL_MAP_READ_BIT);
-	assert(hemi);
-	if (!hemi)
-	{
-		fprintf(stderr, "Fatal error! Could not map hemisphere buffer!\n");
-		exit(-1);
-	}
+	// do the GPU->CPU transfer of downsampled hemispheres
+	float *hemi = (float*)LM_CALLOC(ctx->lightmap.width * ctx->lightmap.height, 4 * sizeof(float));
+	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.storage.texture);
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, hemi);
 
 	// write results to lightmap texture
-	unsigned int hemiIndex = 0;
-	for (unsigned int hy = 0; hy < ctx->hemisphere.fbHemiCountY; hy++)
+	for (int y = 0; y < ctx->hemisphere.storage.writePosition.y + (int)ctx->hemisphere.fbHemiCountY; y++)
 	{
-		for (unsigned int hx = 0; hx < ctx->hemisphere.fbHemiCountX; hx++)
+		for (int x = 0; x < ctx->lightmap.width; x++)
 		{
-			float *c = hemi + (hy * ctx->hemisphere.fbHemiCountX + hx) * 4;
-			float validity = c[3];
-
-			lm_ivec2 lmUV = ctx->hemisphere.transfer.fbHemiToLightmapLocation[hy * ctx->hemisphere.fbHemiCountX + hx];
-			float *lm = ctx->lightmap.data + (lmUV.y * ctx->lightmap.width + lmUV.x) * ctx->lightmap.channels;
-			if (!lm[0] && validity > 0.9)
+			lm_ivec2 lmUV = ctx->hemisphere.storage.toLightmapLocation[y * ctx->lightmap.width + x];
+			if (lmUV.x >= 0)
 			{
-				float scale = 1.0f / validity;
-				switch (ctx->lightmap.channels)
+				float *c = hemi + (y * ctx->lightmap.width + x) * 4;
+				float validity = c[3];
+				float *lm = ctx->lightmap.data + (lmUV.y * ctx->lightmap.width + lmUV.x) * ctx->lightmap.channels;
+				if (!lm[0] && validity > 0.9)
 				{
-				case 1:
-					lm[0] = lm_maxf((c[0] + c[1] + c[2]) * scale / 3.0f, FLT_MIN);
-					break;
-				case 2:
-					lm[0] = lm_maxf((c[0] + c[1] + c[2]) * scale / 3.0f, FLT_MIN);
-					lm[1] = 1.0f; // do we want to support this format?
-					break;
-				case 3:
-					lm[0] = lm_maxf(c[0] * scale, FLT_MIN);
-					lm[1] = lm_maxf(c[1] * scale, FLT_MIN);
-					lm[2] = lm_maxf(c[2] * scale, FLT_MIN);
-					break;
-				case 4:
-					lm[0] = lm_maxf(c[0] * scale, FLT_MIN);
-					lm[1] = lm_maxf(c[1] * scale, FLT_MIN);
-					lm[2] = lm_maxf(c[2] * scale, FLT_MIN);
-					lm[3] = 1.0f;
-					break;
-				default:
-					assert(LM_FALSE);
-					break;
-				}
+					float scale = 1.0f / validity;
+					switch (ctx->lightmap.channels)
+					{
+					case 1:
+						lm[0] = lm_maxf((c[0] + c[1] + c[2]) * scale / 3.0f, FLT_MIN);
+						break;
+					case 2:
+						lm[0] = lm_maxf((c[0] + c[1] + c[2]) * scale / 3.0f, FLT_MIN);
+						lm[1] = 1.0f; // do we want to support this format?
+						break;
+					case 3:
+						lm[0] = lm_maxf(c[0] * scale, FLT_MIN);
+						lm[1] = lm_maxf(c[1] * scale, FLT_MIN);
+						lm[2] = lm_maxf(c[2] * scale, FLT_MIN);
+						break;
+					case 4:
+						lm[0] = lm_maxf(c[0] * scale, FLT_MIN);
+						lm[1] = lm_maxf(c[1] * scale, FLT_MIN);
+						lm[2] = lm_maxf(c[2] * scale, FLT_MIN);
+						lm[3] = 1.0f;
+						break;
+					default:
+						assert(LM_FALSE);
+						break;
+					}
 
 #ifdef LM_DEBUG_INTERPOLATION
-				// set sampled pixel to red in debug output
-				ctx->lightmap.debug[(lmUV.y * ctx->lightmap.width + lmUV.x) * 3 + 0] = 255;
+					// set sampled pixel to red in debug output
+					ctx->lightmap.debug[(lmUV.y * ctx->lightmap.width + lmUV.x) * 3 + 0] = 255;
 #endif
+				}
 			}
-
-			if (++hemiIndex == ctx->hemisphere.transfer.fbHemiCount)
-				goto done;
+			ctx->hemisphere.storage.toLightmapLocation[y * ctx->lightmap.width + x].x = -1; // reset
 		}
 	}
-done:
-	glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-	ctx->hemisphere.transfer.pboTransferStarted = LM_FALSE;
+
+	LM_FREE(hemi);
+	ctx->hemisphere.storage.writePosition = lm_i2(0, 0);
 }
 
 static void lm_setView(
@@ -859,14 +878,50 @@ static void lm_endSampleHemisphere(lm_context *ctx)
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		if (++ctx->hemisphere.fbHemiIndex == ctx->hemisphere.fbHemiCountX * ctx->hemisphere.fbHemiCountY)
 		{
-			// finish hemisphere batch and start a new one
-			lm_finishProcessHemisphereBatch(ctx); // read and process the previous data and finish the batch
-			lm_beginProcessHemisphereBatch(ctx); // downsample new hemisphere batch and kick off transfer
+			// downsample new hemisphere batch and store the results
+			lm_integrateHemisphereBatch(ctx);
 		}
 	}
 }
 
-static lm_vec3 lm_transform(const float *m, lm_vec3 v)
+static void lm_inverseTranspose(const float *m44, float *n33)
+{
+	if (!m44)
+	{
+		n33[0] = 1.0f; n33[1] = 0.0f; n33[2] = 0.0f;
+		n33[3] = 0.0f; n33[4] = 1.0f; n33[5] = 0.0f;
+		n33[6] = 0.0f; n33[7] = 0.0f; n33[8] = 1.0f;
+		return;
+	}
+
+	float determinant = m44[ 0] * (m44[ 5] * m44[10] - m44[ 9] * m44[ 6])
+					  - m44[ 1] * (m44[ 4] * m44[10] - m44[ 6] * m44[ 8])
+					  + m44[ 2] * (m44[ 4] * m44[ 9] - m44[ 5] * m44[ 8]);
+
+	assert(fabs(determinant) > FLT_EPSILON);
+	float rcpDeterminant = 1.0f / determinant;
+	
+	n33[0] =  (m44[ 5] * m44[10] - m44[ 9] * m44[ 6]) * rcpDeterminant;
+	n33[3] = -(m44[ 1] * m44[10] - m44[ 2] * m44[ 9]) * rcpDeterminant;
+	n33[6] =  (m44[ 1] * m44[ 6] - m44[ 2] * m44[ 5]) * rcpDeterminant;
+	n33[1] = -(m44[ 4] * m44[10] - m44[ 6] * m44[ 8]) * rcpDeterminant;
+	n33[4] =  (m44[ 0] * m44[10] - m44[ 2] * m44[ 8]) * rcpDeterminant;
+	n33[7] = -(m44[ 0] * m44[ 6] - m44[ 4] * m44[ 2]) * rcpDeterminant;
+	n33[2] =  (m44[ 4] * m44[ 9] - m44[ 8] * m44[ 5]) * rcpDeterminant;
+	n33[5] = -(m44[ 0] * m44[ 9] - m44[ 8] * m44[ 1]) * rcpDeterminant;
+	n33[8] =  (m44[ 0] * m44[ 5] - m44[ 4] * m44[ 1]) * rcpDeterminant;
+}
+
+static lm_vec3 lm_transformNormal(const float *m, lm_vec3 n)
+{
+	lm_vec3 r;
+	r.x = m[0] * n.x + m[3] * n.y + m[6] * n.z;
+	r.y = m[1] * n.x + m[4] * n.y + m[7] * n.z;
+	r.z = m[2] * n.x + m[5] * n.y + m[8] * n.z;
+	return r;
+}
+
+static lm_vec3 lm_transformPosition(const float *m, lm_vec3 v)
 {
 	if (!m)
 		return v;
@@ -887,6 +942,7 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 	// load and transform triangle to process next
 	lm_vec2 uvMin = lm_v2(FLT_MAX, FLT_MAX), uvMax = lm_v2(-FLT_MAX, -FLT_MAX);
 	lm_vec2 uvScale = lm_v2i(ctx->lightmap.width, ctx->lightmap.height);
+	unsigned int vIndices[3];
 	for (int i = 0; i < 3; i++)
 	{
 		// decode index
@@ -909,6 +965,7 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 			assert(LM_FALSE);
 			break;
 		}
+		vIndices[i] = vIndex;
 
 		// decode and pre-transform vertex position
 		const void *pPtr = ctx->mesh.positions + vIndex * ctx->mesh.positionsStride;
@@ -935,7 +992,7 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 			assert(LM_FALSE);
 		} break;
 		}
-		ctx->meshPosition.triangle.p[i] = lm_transform(ctx->mesh.transform, p);
+		ctx->meshPosition.triangle.p[i] = lm_transformPosition(ctx->mesh.modelMatrix, p);
 
 		// decode and scale (to lightmap resolution) vertex lightmap texture coords
 		const void *uvPtr = ctx->mesh.uvs + vIndex * ctx->mesh.uvsStride;
@@ -961,11 +1018,37 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 			assert(LM_FALSE);
 		} break;
 		}
-		ctx->meshPosition.triangle.uv[i] = lm_mul2(uv, uvScale);
+
+		ctx->meshPosition.triangle.uv[i] = lm_mul2(lm_pmod2(uv, 1.0f), uvScale); // maybe clamp to 0.0-1.0 instead of pmod?
 
 		// update bounds on lightmap
 		uvMin = lm_min2(uvMin, ctx->meshPosition.triangle.uv[i]);
 		uvMax = lm_max2(uvMax, ctx->meshPosition.triangle.uv[i]);
+	}
+
+	lm_vec3 flatNormal = lm_cross3(
+		lm_sub3(ctx->meshPosition.triangle.p[1], ctx->meshPosition.triangle.p[0]),
+		lm_sub3(ctx->meshPosition.triangle.p[2], ctx->meshPosition.triangle.p[0]));
+
+	for (int i = 0; i < 3; i++)
+	{
+		// decode and pre-transform vertex normal
+		const void *nPtr = ctx->mesh.normals + vIndices[i] * ctx->mesh.normalsStride;
+		lm_vec3 n;
+		switch (ctx->mesh.normalsType)
+		{
+		// TODO: signed formats
+		case LM_FLOAT: {
+			n = *(const lm_vec3*)nPtr;
+		} break;
+		case LM_NONE: {
+			n = flatNormal;
+		} break;
+		default: {
+			assert(LM_FALSE);
+		} break;
+		}
+		ctx->meshPosition.triangle.n[i] = lm_normalize3(lm_transformNormal(ctx->mesh.normalMatrix, n));
 	}
 
 	// calculate area of interest (on lightmap) for conservative rasterization
@@ -1061,11 +1144,13 @@ static float lm_defaultWeights(float cos_theta, void *userdata)
 
 lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 	float clearR, float clearG, float clearB,
-	int interpolationPasses, float interpolationThreshold)
+	int interpolationPasses, float interpolationThreshold,
+	float cameraToSurfaceDistanceModifier)
 {
 	assert(hemisphereSize == 512 || hemisphereSize == 256 || hemisphereSize == 128 ||
 		   hemisphereSize ==  64 || hemisphereSize ==  32 || hemisphereSize ==  16);
 	assert(zNear < zFar && zNear > 0.0f);
+	assert(cameraToSurfaceDistanceModifier >= -1.0f);
 	assert(interpolationPasses >= 0 && interpolationPasses <= 8);
 	assert(interpolationThreshold >= 0.0f);
 
@@ -1076,21 +1161,20 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 	ctx->hemisphere.size = hemisphereSize;
 	ctx->hemisphere.zNear = zNear;
 	ctx->hemisphere.zFar = zFar;
+	ctx->hemisphere.cameraToSurfaceDistanceModifier = cameraToSurfaceDistanceModifier;
 	ctx->hemisphere.clearColor.r = clearR;
 	ctx->hemisphere.clearColor.g = clearG;
 	ctx->hemisphere.clearColor.b = clearB;
-
-	// TODO: test for all needed extensions!
 
 	// calculate hemisphere batch size
 	ctx->hemisphere.fbHemiCountX = 1536 / (3 * ctx->hemisphere.size);
 	ctx->hemisphere.fbHemiCountY = 512 / ctx->hemisphere.size;
 
 	// hemisphere batch framebuffers
-	int w[] = {
+	unsigned int w[] = {
 		ctx->hemisphere.fbHemiCountX * ctx->hemisphere.size * 3,
 		ctx->hemisphere.fbHemiCountX * ctx->hemisphere.size / 2 };
-	int h[] = {
+	unsigned int h[] = {
 		ctx->hemisphere.fbHemiCountY * ctx->hemisphere.size,
 		ctx->hemisphere.fbHemiCountY * ctx->hemisphere.size / 2 };
 
@@ -1157,16 +1241,14 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 			"vec4 threeWeightedSamples(ivec2 h_uv, ivec2 w_uv, ivec2 offset)\n"
 			"{\n" // horizontal triple sum
 				"vec4 sum = weightedSample(h_uv, w_uv, offset);\n"
-				"offset.x += 2;\n"
-				"sum += weightedSample(h_uv, w_uv, offset);\n"
-				"offset.x += 2;\n"
-				"sum += weightedSample(h_uv, w_uv, offset);\n"
+				"sum += weightedSample(h_uv, w_uv, offset + ivec2(2, 0));\n"
+				"sum += weightedSample(h_uv, w_uv, offset + ivec2(4, 0));\n"
 				"return sum;\n"
 			"}\n"
 
 			"void main()\n"
 			"{\n" // this is a weighted sum downsampling pass (alpha component contains the weighted valid sample count)
-				"vec2 in_uv = (gl_FragCoord.xy - vec2(0.5)) * vec2(6.0, 2.0) + vec2(0.01);\n"
+				"vec2 in_uv = gl_FragCoord.xy * vec2(6.0, 2.0) + vec2(0.5);\n"
 				"ivec2 h_uv = ivec2(in_uv);\n"
 				"ivec2 w_uv = ivec2(mod(in_uv, vec2(textureSize(weights, 0))));\n" // there's no integer modulo :(
 				"vec4 lb = threeWeightedSamples(h_uv, w_uv, ivec2(0, 0));\n"
@@ -1203,11 +1285,13 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 			"#version 150 core\n"
 			"uniform sampler2D hemispheres;\n"
 
+			"layout(pixel_center_integer) in vec4 gl_FragCoord;\n" // whole integer values represent pixel centers, GL_ARB_fragment_coord_conventions
+			
 			"out vec4 outColor;\n"
 
 			"void main()\n"
 			"{\n" // this is a sum downsampling pass (alpha component contains the weighted valid sample count)
-				"ivec2 h_uv = ivec2((gl_FragCoord.xy - vec2(0.5)) * 2.0 + vec2(0.01));\n"
+				"ivec2 h_uv = ivec2(gl_FragCoord.xy) * 2;\n"
 				"vec4 lb = texelFetch(hemispheres, h_uv + ivec2(0, 0), 0);\n"
 				"vec4 rb = texelFetch(hemispheres, h_uv + ivec2(1, 0), 0);\n"
 				"vec4 lt = texelFetch(hemispheres, h_uv + ivec2(0, 1), 0);\n"
@@ -1229,23 +1313,16 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 		ctx->hemisphere.downsamplePass.hemispheresTextureID = glGetUniformLocation(ctx->hemisphere.downsamplePass.programID, "hemispheres");
 	}
 
-	// pbo (needed for async GPU->CPU transfers of the downsampled hemisphere results)
-	glGenBuffers(1, &ctx->hemisphere.transfer.pbo);
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.transfer.pbo);
-	glBufferData(GL_PIXEL_PACK_BUFFER, ctx->hemisphere.fbHemiCountX * ctx->hemisphere.fbHemiCountY * 4 * sizeof(float), 0, GL_STREAM_READ);
-	//glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-
 	// hemisphere weights texture
 	glGenTextures(1, &ctx->hemisphere.firstPass.weightsTexture);
 	lmSetHemisphereWeights(ctx, lm_defaultWeights, 0);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
-	// allocate batchPosition-to-lightmapPosition maps
+	// allocate batchPosition-to-lightmapPosition map
 	ctx->hemisphere.fbHemiToLightmapLocation = (lm_ivec2*)LM_CALLOC(ctx->hemisphere.fbHemiCountX * ctx->hemisphere.fbHemiCountY, sizeof(lm_ivec2));
-	ctx->hemisphere.transfer.fbHemiToLightmapLocation = (lm_ivec2*)LM_CALLOC(ctx->hemisphere.fbHemiCountX * ctx->hemisphere.fbHemiCountY, sizeof(lm_ivec2));
 
 	return ctx;
 }
@@ -1263,16 +1340,17 @@ void lmDestroy(lm_context *ctx)
 
 	// delete gl objects
 	glDeleteTextures(1, &ctx->hemisphere.firstPass.weightsTexture);
-	glDeleteBuffers(1, &ctx->hemisphere.transfer.pbo);
+	glDeleteTextures(1, &ctx->hemisphere.storage.texture);
 	glDeleteProgram(ctx->hemisphere.downsamplePass.programID);
 	glDeleteProgram(ctx->hemisphere.firstPass.programID);
 	glDeleteVertexArrays(1, &ctx->hemisphere.vao);
 	glDeleteRenderbuffers(1, &ctx->hemisphere.fbDepth);
 	glDeleteFramebuffers(2, ctx->hemisphere.fb);
 	glDeleteTextures(2, ctx->hemisphere.fbTexture);
+	glDeleteTextures(1, &ctx->hemisphere.storage.texture);
 
 	// free memory
-	LM_FREE(ctx->hemisphere.transfer.fbHemiToLightmapLocation);
+	LM_FREE(ctx->hemisphere.storage.toLightmapLocation);
 	LM_FREE(ctx->hemisphere.fbHemiToLightmapLocation);
 #ifdef LM_DEBUG_INTERPOLATION
 	LM_FREE(ctx->lightmap.debug);
@@ -1334,6 +1412,24 @@ void lmSetTargetLightmap(lm_context *ctx, float *outLightmap, int w, int h, int 
 	ctx->lightmap.height = h;
 	ctx->lightmap.channels = c;
 
+	// allocate storage texture
+	if (!ctx->hemisphere.storage.texture)
+		glGenTextures(1, &ctx->hemisphere.storage.texture);
+	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.storage.texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, 0);
+
+	// allocate storage position to lightmap position map
+	if (ctx->hemisphere.storage.toLightmapLocation)
+		LM_FREE(ctx->hemisphere.storage.toLightmapLocation);
+	ctx->hemisphere.storage.toLightmapLocation = (lm_ivec2*)LM_CALLOC(w * h, sizeof(lm_ivec2));
+	// invalidate all positions
+	for (int i = 0; i < w * h; i++)
+		ctx->hemisphere.storage.toLightmapLocation[i].x = -1;
+
 #ifdef LM_DEBUG_INTERPOLATION
 	if (ctx->lightmap.debug)
 		LM_FREE(ctx->lightmap.debug);
@@ -1344,19 +1440,25 @@ void lmSetTargetLightmap(lm_context *ctx, float *outLightmap, int w, int h, int 
 void lmSetGeometry(lm_context *ctx,
 	const float *transformationMatrix,
 	lm_type positionsType, const void *positionsXYZ, int positionsStride,
+	lm_type normalsType, const void *normalsXYZ, int normalsStride,
 	lm_type lightmapCoordsType, const void *lightmapCoordsUV, int lightmapCoordsStride,
 	int count, lm_type indicesType, const void *indices)
 {
-	ctx->mesh.transform = transformationMatrix;
+	ctx->mesh.modelMatrix = transformationMatrix;
 	ctx->mesh.positions = (const unsigned char*)positionsXYZ;
 	ctx->mesh.positionsType = positionsType;
 	ctx->mesh.positionsStride = positionsStride == 0 ? sizeof(lm_vec3) : positionsStride;
+	ctx->mesh.normals = (const unsigned char*)normalsXYZ;
+	ctx->mesh.normalsType = normalsType;
+	ctx->mesh.normalsStride = normalsStride == 0 ? sizeof(lm_vec3) : normalsStride;
 	ctx->mesh.uvs = (const unsigned char*)lightmapCoordsUV;
 	ctx->mesh.uvsType = lightmapCoordsType;
 	ctx->mesh.uvsStride = lightmapCoordsStride == 0 ? sizeof(lm_vec2) : lightmapCoordsStride;
 	ctx->mesh.indicesType = indicesType;
 	ctx->mesh.indices = (const unsigned char*)indices;
 	ctx->mesh.count = count;
+
+	lm_inverseTranspose(transformationMatrix, ctx->mesh.normalMatrix);
 
 	ctx->meshPosition.pass = 0;
 	lm_setMeshPosition(ctx, 0);
@@ -1380,9 +1482,8 @@ lm_bool lmBegin(lm_context *ctx, int* outViewport4, float* outView4x4, float* ou
 			}
 			else
 			{ // ...and there are no triangles left: finish
-				lm_finishProcessHemisphereBatch(ctx); // finish pending batch
-				lm_beginProcessHemisphereBatch(ctx); // start last batch, if there are unprocessed hemispheres
-				lm_finishProcessHemisphereBatch(ctx); // finish last batch
+				lm_integrateHemisphereBatch(ctx); // integrate and store last batch
+				lm_writeResultsToLightmap(ctx); // read storage data from gpu memory and write it to the lightmap
 
 				if (++ctx->meshPosition.pass == ctx->meshPosition.passCount)
 				{
@@ -1623,7 +1724,11 @@ lm_bool lmImageSaveTGAub(const char *filename, const unsigned char *image, int w
 	assert(c == 1 || c == 3 || c == 4);
 	lm_bool isGreyscale = c == 1;
 	lm_bool hasAlpha = c == 4;
-	unsigned char header[18] = { 0, 0, isGreyscale ? 3 : 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, w & 0xff, (w >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff, (unsigned char)(8 * c), hasAlpha ? 8 : 0 };
+	unsigned char header[18] = {
+		0, 0, (unsigned char)(isGreyscale ? 3 : 2), 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		(unsigned char)(w & 0xff), (unsigned char)((w >> 8) & 0xff), (unsigned char)(h & 0xff), (unsigned char)((h >> 8) & 0xff),
+		(unsigned char)(8 * c), (unsigned char)(hasAlpha ? 8 : 0)
+	};
 #if defined(_MSC_VER) && _MSC_VER >= 1400
 	FILE *file;
 	if (fopen_s(&file, filename, "wb") != 0) return LM_FALSE;

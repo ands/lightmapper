@@ -45,8 +45,11 @@ static int bake(scene_t *scene)
 		64,               // hemisphere resolution (power of two, max=512)
 		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
 		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
-		2, 0.01f);        // lightmap interpolation threshold (small differences are interpolated rather than sampled)
-	                      // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
+		2, 0.01f,         // lightmap interpolation threshold (small differences are interpolated rather than sampled)
+						  // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
+		0.0f);            // modifier for camera-to-surface distance for hemisphere rendering.
+		                  // tweak this to trade-off between interpolated normals quality and other artifacts (see declaration).
+
 	if (!ctx)
 	{
 		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
@@ -57,8 +60,9 @@ static int bake(scene_t *scene)
 	float *data = calloc(w * h * 4, sizeof(float));
 	lmSetTargetLightmap(ctx, data, w, h, 4);
 
-	lmSetGeometry(ctx, NULL,
+	lmSetGeometry(ctx, NULL,                                                                 // no transformation in this example
 		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, p), sizeof(vertex_t),
+		LM_NONE , NULL                                                   , 0               , // no interpolated normals in this example
 		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, t), sizeof(vertex_t),
 		scene->indexCount, LM_UNSIGNED_SHORT, scene->indices);
 
@@ -88,13 +92,13 @@ static int bake(scene_t *scene)
 
 	// postprocess texture
 	float *temp = calloc(w * h * 4, sizeof(float));
-	lmImageSmooth(data, temp, w, h, 4);
-	lmImageDilate(temp, data, w, h, 4);
 	for (int i = 0; i < 16; i++)
 	{
 		lmImageDilate(data, temp, w, h, 4);
 		lmImageDilate(temp, data, w, h, 4);
 	}
+	lmImageSmooth(data, temp, w, h, 4);
+	lmImageDilate(temp, data, w, h, 4);
 	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
 	free(temp);
 
