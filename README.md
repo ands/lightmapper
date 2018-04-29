@@ -32,7 +32,9 @@ lm_context *ctx = lmCreate(
 	64,               // hemicube rendering resolution/quality
 	0.001f, 100.0f,   // zNear, zFar
 	1.0f, 1.0f, 1.0f, // sky/clear color
-	2, 0.01f);        // hierarchical selective interpolation for speedup (passes, threshold)
+	2, 0.01f          // hierarchical selective interpolation for speedup (passes, threshold)
+	0.0f);            // modifier for camera-to-surface distance for hemisphere rendering.
+	                  // tweak this to trade-off between interpolated vertex normal quality and other artifacts (see declaration).
 if (!ctx)
 {
 	printf("Could not initialize lightmapper.\n");
@@ -49,6 +51,7 @@ for (int b = 0; b < bounces; b++)
 		
 		lmSetGeometry(ctx, mesh[i].modelMatrix,
 			LM_FLOAT, (uint8_t*)mesh[i].vertices + positionOffset, vertexSize,
+			LM_NONE , NULL, 0, // optional vertex normals for smooth surfaces
 			LM_FLOAT, (uint8_t*)mesh[i].vertices + lightmapUVOffset, vertexSize,
 			mesh[i].indexCount, LM_UNSIGNED_SHORT, mesh[i].indices);
 	
