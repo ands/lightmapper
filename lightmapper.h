@@ -2,7 +2,7 @@
 * A single header file OpenGL lightmapping library         *
 * https://github.com/ands/lightmapper                      *
 * no warranty implied | use at your own risk               *
-* author: Andreas Mantler (ands) | last change: 30.04.2018 *
+* author: Andreas Mantler (ands) | last change: 10.05.2018 *
 *                                                          *
 * License:                                                 *
 * This software is in the public domain.                   *
@@ -494,7 +494,7 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		{
 			neighborsExpected += 2;
 			if (ctx->meshPosition.rasterizer.x - d >= ctx->meshPosition.rasterizer.minx &&
-				ctx->meshPosition.rasterizer.x + d <  ctx->meshPosition.rasterizer.maxx)
+				ctx->meshPosition.rasterizer.x + d <= ctx->meshPosition.rasterizer.maxx)
 			{
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x - d, ctx->meshPosition.rasterizer.y);
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x + d, ctx->meshPosition.rasterizer.y);
@@ -504,7 +504,7 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		{
 			neighborsExpected += 2;
 			if (ctx->meshPosition.rasterizer.y - d >= ctx->meshPosition.rasterizer.miny &&
-				ctx->meshPosition.rasterizer.y + d <  ctx->meshPosition.rasterizer.maxy)
+				ctx->meshPosition.rasterizer.y + d <= ctx->meshPosition.rasterizer.maxy)
 			{
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y - d);
 				neighbors[neighborCount++] = lm_getLightmapPixel(ctx, ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y + d);
@@ -1056,10 +1056,10 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 	lm_vec2 bbMax = lm_ceil2 (uvMax);
 	ctx->meshPosition.rasterizer.minx = lm_maxi((int)bbMin.x - 1, 0);
 	ctx->meshPosition.rasterizer.miny = lm_maxi((int)bbMin.y - 1, 0);
-	ctx->meshPosition.rasterizer.maxx = lm_mini((int)bbMax.x + 1, ctx->lightmap.width);
-	ctx->meshPosition.rasterizer.maxy = lm_mini((int)bbMax.y + 1, ctx->lightmap.height);
-	assert(ctx->meshPosition.rasterizer.minx < ctx->meshPosition.rasterizer.maxx &&
-		   ctx->meshPosition.rasterizer.miny < ctx->meshPosition.rasterizer.maxy);
+	ctx->meshPosition.rasterizer.maxx = lm_mini((int)bbMax.x + 1, ctx->lightmap.width - 1);
+	ctx->meshPosition.rasterizer.maxy = lm_mini((int)bbMax.y + 1, ctx->lightmap.height - 1);
+	assert(ctx->meshPosition.rasterizer.minx <= ctx->meshPosition.rasterizer.maxx &&
+		   ctx->meshPosition.rasterizer.miny <= ctx->meshPosition.rasterizer.maxy);
 	ctx->meshPosition.rasterizer.x = ctx->meshPosition.rasterizer.minx + lm_passOffsetX(ctx);
 	ctx->meshPosition.rasterizer.y = ctx->meshPosition.rasterizer.miny + lm_passOffsetY(ctx);
 
