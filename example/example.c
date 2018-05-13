@@ -55,7 +55,7 @@ static int bake(scene_t *scene)
 		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
 		return 0;
 	}
-	
+
 	int w = scene->w, h = scene->h;
 	float *data = calloc(w * h * 4, sizeof(float));
 	lmSetTargetLightmap(ctx, data, w, h, 4);
@@ -87,7 +87,7 @@ static int bake(scene_t *scene)
 		lmEnd(ctx);
 	}
 	printf("\rFinished baking %d triangles.\n", scene->indexCount / 3);
-	
+
 	lmDestroy(ctx);
 
 	// postprocess texture
@@ -172,7 +172,7 @@ int main(int argc, char* argv[])
 		float view[16], projection[16];
 		fpsCameraViewMatrix(window, view);
 		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-		
+
 		// draw to screen with a blueish sky
 		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -259,7 +259,7 @@ static int initScene(scene_t *scene)
         "a_position",
         "a_texcoord"
     };
-    
+
 	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
 	{
@@ -417,10 +417,10 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 	}
 	glAttachShader(program, vertexShader);
 	glAttachShader(program, fragmentShader);
-    
+
     for (int i = 0; i < attributeCount; i++)
         glBindAttribLocation(program, i, attributes[i]);
-    
+
 	glLinkProgram(program);
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
