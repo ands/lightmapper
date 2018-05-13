@@ -172,6 +172,7 @@ int main(int argc, char* argv[])
 	if (!window)
 	{
 		fprintf(stderr, "Could not create window.\n");
+		glfwTerminate();
 		return EXIT_FAILURE;
 	}
 
@@ -183,6 +184,7 @@ int main(int argc, char* argv[])
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
+		glfwDestroyWindow(window);
 		glfwTerminate();
 		return EXIT_FAILURE;
 	}
