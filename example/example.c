@@ -55,7 +55,7 @@ static int bake(scene_t *scene)
 		fprintf(stderr, "Error: Could not initialize lightmapper.\n");
 		return 0;
 	}
-	
+
 	int w = scene->w, h = scene->h;
 	float *data = calloc(w * h * 4, sizeof(float));
 	lmSetTargetLightmap(ctx, data, w, h, 4);
@@ -87,7 +87,7 @@ static int bake(scene_t *scene)
 		lmEnd(ctx);
 	}
 	printf("\rFinished baking %d triangles.\n", scene->indexCount / 3);
-	
+
 	lmDestroy(ctx);
 
 	// postprocess texture
@@ -122,10 +122,39 @@ static void error_callback(int error, const char *description)
 static void fpsCameraViewMatrix(GLFWwindow *window, float *view);
 static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar);
 
+static void mainLoop(GLFWwindow *window, scene_t *scene)
+{
+	glfwPollEvents();
+	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+		bake(scene);
+
+	int w, h;
+	glfwGetFramebufferSize(window, &w, &h);
+	glViewport(0, 0, w, h);
+
+	// camera for glfw window
+	float view[16], projection[16];
+	fpsCameraViewMatrix(window, view);
+	perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
+
+	// draw to screen with a blueish sky
+	glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	drawScene(scene, view, projection);
+
+	glfwSwapBuffers(window);
+}
+
 int main(int argc, char* argv[])
 {
 	glfwSetErrorCallback(error_callback);
-	if (!glfwInit()) return 1;
+
+	if (!glfwInit())
+	{
+		fprintf(stderr, "Could not initialize GLFW.\n");
+		return EXIT_FAILURE;
+	}
+
 	glfwWindowHint(GLFW_RED_BITS, 8);
 	glfwWindowHint(GLFW_GREEN_BITS, 8);
 	glfwWindowHint(GLFW_BLUE_BITS, 8);
@@ -138,8 +167,15 @@ int main(int argc, char* argv[])
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
+
 	GLFWwindow *window = glfwCreateWindow(1024, 768, "Lightmapping Example", NULL, NULL);
-	if (!window) return 1;
+	if (!window)
+	{
+		fprintf(stderr, "Could not create window.\n");
+		glfwTerminate();
+		return EXIT_FAILURE;
+	}
+
 	glfwMakeContextCurrent(window);
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 	glfwSwapInterval(1);
@@ -148,7 +184,9 @@ int main(int argc, char* argv[])
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
-		return 1;
+		glfwDestroyWindow(window);
+		glfwTerminate();
+		return EXIT_FAILURE;
 	}
 
 	printf("Ambient Occlusion Baking Example.\n");
@@ -160,31 +198,13 @@ int main(int argc, char* argv[])
 
 	while (!glfwWindowShouldClose(window))
 	{
-		glfwPollEvents();
-		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-			bake(&scene);
-
-		int w, h;
-		glfwGetFramebufferSize(window, &w, &h);
-		glViewport(0, 0, w, h);
-
-		// camera for glfw window
-		float view[16], projection[16];
-		fpsCameraViewMatrix(window, view);
-		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-		
-		// draw to screen with a blueish sky
-		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		drawScene(&scene, view, projection);
-
-		glfwSwapBuffers(window);
+		mainLoop(window, &scene);
 	}
 
 	destroyScene(&scene);
 	glfwDestroyWindow(window);
 	glfwTerminate();
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 // helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -254,12 +274,12 @@ static int initScene(scene_t *scene)
 		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
 		"}\n";
 
-    const char *attribs[] =
-    {
-        "a_position",
-        "a_texcoord"
-    };
-    
+	const char *attribs[] =
+	{
+		"a_position",
+		"a_texcoord"
+	};
+
 	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
 	{
@@ -417,10 +437,10 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 	}
 	glAttachShader(program, vertexShader);
 	glAttachShader(program, fragmentShader);
-    
-    for (int i = 0; i < attributeCount; i++)
-        glBindAttribLocation(program, i, attributes[i]);
-    
+
+	for (int i = 0; i < attributeCount; i++)
+		glBindAttribLocation(program, i, attributes[i]);
+
 	glLinkProgram(program);
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);

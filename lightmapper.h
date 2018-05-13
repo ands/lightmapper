@@ -72,7 +72,7 @@ void lmSetGeometry(lm_context *ctx,
 	int count, lm_type indicesType LM_DEFAULT_VALUE(LM_NONE), const void *indices LM_DEFAULT_VALUE(0));// if mesh indices are used, count = number of indices else count = number of vertices.
 
 
-// as long as lmBegin returns true, the scene has to be rendered with the 
+// as long as lmBegin returns true, the scene has to be rendered with the
 // returned camera and view parameters to the currently bound framebuffer.
 // if lmBegin returns true, it must be followed by lmEnd after rendering!
 lm_bool lmBegin(lm_context *ctx,
@@ -575,7 +575,7 @@ static lm_bool lm_trySamplingConservativeTriangleRasterizerPosition(lm_context *
 		!lm_finite3(ctx->meshPosition.sample.direction) ||
 		lm_length3sq(ctx->meshPosition.sample.direction) < 0.5f) // don't allow 0.0f. should always be ~1.0f
 		return LM_FALSE;
-	
+
 	lm_vec3 up = lm_v3(0.0f, 1.0f, 0.0f);
 	if (lm_absf(lm_dot3(up, ctx->meshPosition.sample.direction)) > 0.8f)
 		up = lm_v3(0.0f, 0.0f, 1.0f);
@@ -811,7 +811,7 @@ static lm_bool lm_beginSampleHemisphere(lm_context *ctx, int* viewport, float* v
 				ctx->hemisphere.clearColor.b, 1.0f);
 			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		}
-		ctx->hemisphere.fbHemiToLightmapLocation[ctx->hemisphere.fbHemiIndex] = 
+		ctx->hemisphere.fbHemiToLightmapLocation[ctx->hemisphere.fbHemiIndex] =
 			lm_i2(ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y);
 	}
 
@@ -900,7 +900,7 @@ static void lm_inverseTranspose(const float *m44, float *n33)
 
 	assert(fabs(determinant) > FLT_EPSILON);
 	float rcpDeterminant = 1.0f / determinant;
-	
+
 	n33[0] =  (m44[ 5] * m44[10] - m44[ 9] * m44[ 6]) * rcpDeterminant;
 	n33[3] = -(m44[ 1] * m44[10] - m44[ 2] * m44[ 9]) * rcpDeterminant;
 	n33[6] =  (m44[ 1] * m44[ 6] - m44[ 2] * m44[ 5]) * rcpDeterminant;
@@ -1064,7 +1064,7 @@ static void lm_setMeshPosition(lm_context *ctx, unsigned int indicesTriangleBase
 	ctx->meshPosition.rasterizer.y = ctx->meshPosition.rasterizer.miny + lm_passOffsetY(ctx);
 
 	// try moving to first valid sample position
-	if (ctx->meshPosition.rasterizer.x <= ctx->meshPosition.rasterizer.maxx && 
+	if (ctx->meshPosition.rasterizer.x <= ctx->meshPosition.rasterizer.maxx &&
 		ctx->meshPosition.rasterizer.y <= ctx->meshPosition.rasterizer.maxy &&
 		lm_findFirstConservativeTriangleRasterizerPosition(ctx))
 		ctx->meshPosition.hemisphere.side = 0; // we can start sampling the hemisphere
@@ -1286,7 +1286,7 @@ lm_context *lmCreate(int hemisphereSize, float zNear, float zFar,
 			"uniform sampler2D hemispheres;\n"
 
 			"layout(pixel_center_integer) in vec4 gl_FragCoord;\n" // whole integer values represent pixel centers, GL_ARB_fragment_coord_conventions
-			
+
 			"out vec4 outColor;\n"
 
 			"void main()\n"
