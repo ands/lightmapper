@@ -254,11 +254,11 @@ static int initScene(scene_t *scene)
 		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
 		"}\n";
 
-    const char *attribs[] =
-    {
-        "a_position",
-        "a_texcoord"
-    };
+	const char *attribs[] =
+	{
+		"a_position",
+		"a_texcoord"
+	};
 
 	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
@@ -418,8 +418,8 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 	glAttachShader(program, vertexShader);
 	glAttachShader(program, fragmentShader);
 
-    for (int i = 0; i < attributeCount; i++)
-        glBindAttribLocation(program, i, attributes[i]);
+	for (int i = 0; i < attributeCount; i++)
+		glBindAttribLocation(program, i, attributes[i]);
 
 	glLinkProgram(program);
 	glDeleteShader(vertexShader);
