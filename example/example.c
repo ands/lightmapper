@@ -122,6 +122,29 @@ static void error_callback(int error, const char *description)
 static void fpsCameraViewMatrix(GLFWwindow *window, float *view);
 static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar);
 
+static void mainLoop(GLFWwindow *window, scene_t *scene)
+{
+	glfwPollEvents();
+	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+		bake(scene);
+
+	int w, h;
+	glfwGetFramebufferSize(window, &w, &h);
+	glViewport(0, 0, w, h);
+
+	// camera for glfw window
+	float view[16], projection[16];
+	fpsCameraViewMatrix(window, view);
+	perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
+
+	// draw to screen with a blueish sky
+	glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	drawScene(scene, view, projection);
+
+	glfwSwapBuffers(window);
+}
+
 int main(int argc, char* argv[])
 {
 	glfwSetErrorCallback(error_callback);
@@ -160,25 +183,7 @@ int main(int argc, char* argv[])
 
 	while (!glfwWindowShouldClose(window))
 	{
-		glfwPollEvents();
-		if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-			bake(&scene);
-
-		int w, h;
-		glfwGetFramebufferSize(window, &w, &h);
-		glViewport(0, 0, w, h);
-
-		// camera for glfw window
-		float view[16], projection[16];
-		fpsCameraViewMatrix(window, view);
-		perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
-
-		// draw to screen with a blueish sky
-		glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		drawScene(&scene, view, projection);
-
-		glfwSwapBuffers(window);
+		mainLoop(window, &scene);
 	}
 
 	destroyScene(&scene);
