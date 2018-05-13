@@ -148,7 +148,13 @@ static void mainLoop(GLFWwindow *window, scene_t *scene)
 int main(int argc, char* argv[])
 {
 	glfwSetErrorCallback(error_callback);
-	if (!glfwInit()) return 1;
+
+	if (!glfwInit())
+	{
+		fprintf(stderr, "Could not initialize GLFW.\n");
+		return EXIT_FAILURE;
+	}
+
 	glfwWindowHint(GLFW_RED_BITS, 8);
 	glfwWindowHint(GLFW_GREEN_BITS, 8);
 	glfwWindowHint(GLFW_BLUE_BITS, 8);
@@ -161,8 +167,14 @@ int main(int argc, char* argv[])
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
+
 	GLFWwindow *window = glfwCreateWindow(1024, 768, "Lightmapping Example", NULL, NULL);
-	if (!window) return 1;
+	if (!window)
+	{
+		fprintf(stderr, "Could not create window.\n");
+		return EXIT_FAILURE;
+	}
+
 	glfwMakeContextCurrent(window);
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 	glfwSwapInterval(1);
@@ -171,7 +183,8 @@ int main(int argc, char* argv[])
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
-		return 1;
+		glfwTerminate();
+		return EXIT_FAILURE;
 	}
 
 	printf("Ambient Occlusion Baking Example.\n");
@@ -189,7 +202,7 @@ int main(int argc, char* argv[])
 	destroyScene(&scene);
 	glfwDestroyWindow(window);
 	glfwTerminate();
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 // helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
