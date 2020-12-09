@@ -98,7 +98,7 @@ void lmImageScale(float *image, int w, int h, int c, float factor, int m LM_DEFA
 void lmImagePower(float *image, int w, int h, int c, float exponent, int m LM_DEFAULT_VALUE(LM_ALL_CHANNELS));         // in-place powf(v, exponent) of the specified channels (for gamma)
 void lmImageDilate(const float *image, float *outImage, int w, int h, int c);                                          // widen the populated non-zero areas by 1 pixel.
 void lmImageSmooth(const float *image, float *outImage, int w, int h, int c);                                          // simple box filter on only the non-zero values.
-void lmImageDownsample(const float *image, float *outImage, int w, int h, int c);                                      // downsamples [0..w]x[0..h] to [0..w/2]x[0..h/2] by avereging only the non-zero values
+void lmImageDownsample(const float *image, float *outImage, int w, int h, int c);                                      // downsamples [0..w]x[0..h] to [0..w/2]x[0..h/2] by averaging only the non-zero values
 void lmImageFtoUB(const float *image, unsigned char *outImage, int w, int h, int c, float max LM_DEFAULT_VALUE(0.0f)); // casts a floating point image to an 8bit/channel image
 
 // TGA file output helpers
