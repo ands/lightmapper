@@ -11,7 +11,7 @@ While the simple example application demonstrates the baking of ambient occlusio
 
 Any light shapes and emissive surfaces are supported as long as you draw them with their corresponding emissive light colors.
 
-You may want to use [thekla_atlas](https://github.com/Thekla/thekla_atlas) or [uvatlas](https://uvatlas.codeplex.com/) to prepare your geometry for lightmapping.
+You may want to use [thekla_atlas](https://github.com/Thekla/thekla_atlas) / [xatlas](https://github.com/jpcy/xatlas) or [uvatlas](https://github.com/microsoft/UVAtlas) to prepare your geometry for lightmapping.
 
 # Example application
 ![Lightmapper Example Screenshot](https://github.com/ands/lightmapper/raw/master/example_images/example.png)
