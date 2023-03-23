@@ -1,4 +1,4 @@
-#define _USE_MATH_DEFINES
+﻿#define _USE_MATH_DEFINES
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -21,34 +21,44 @@ typedef struct {
 
 typedef struct
 {
-	GLuint program;
-	GLint u_lightmap;
-	GLint u_projection;
-	GLint u_view;
+	GLuint program;			// shader program
+	GLint u_lightmap;		// shader program uniform lightmap id 
+	GLint u_projection;		// shader program uniform projection matrix
+	GLint u_view;			// shader program uniform view matrix
 
-	GLuint lightmap;
-	int w, h;
+	GLuint lightmap;		// lightmap texture
+	int w, h;				// width height
 
-	GLuint vao, vbo, ibo;
-	vertex_t *vertices;
-	unsigned short *indices;
-	unsigned int vertexCount, indexCount;
+	GLuint vao, vbo, ibo;	// vao / vbo /ibo	¶¥µãÊý¾Ý / »º´æ¶¥µãÊý¾Ý / ¶¥µãË÷ÒýÊý¾Ý
+	vertex_t* vertices;		// ¶¥µãÊý¾Ý
+	unsigned short* indices;// ¶¥µãË÷ÒýÊý¾Ý
+	unsigned int vertexCount, indexCount;	// ¶¥µãÊý¾ÝÊýÁ¿ ¶¥µãË÷ÒýÊýÁ¿
 } scene_t;
 
-static int initScene(scene_t *scene);
-static void drawScene(scene_t *scene, float *view, float *projection);
-static void destroyScene(scene_t *scene);
+static int initScene(scene_t* scene);
+static void drawScene(scene_t* scene, float* view, float* projection);
+static void destroyScene(scene_t* scene);
 
-static int bake(scene_t *scene)
+scene_t scene = { 0 };
+
+float render_view[16], render_projection[16];
+
+static int bake(scene_t* scene)
 {
-	lm_context *ctx = lmCreate(
-		64,               // hemisphere resolution (power of two, max=512)
+	// ´´½¨LightMapÉÏÏÂÎÄ
+	// ·Ö±æÂÊ
+	// Ïà»ú zNera / zFar
+	// BackgroundClear clearR clearG clearB
+	// ²åÖµpass ²åÖµãÐÖµ
+	// Ïà»ú±íÃæ¾àÀëÐÞ¸ÄÆ÷
+	lm_context* ctx = lmCreate(
+		512,               // hemisphere resolution (power of two, max=512)
 		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
-		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
+		0.0f, 0.0f, 0.0f, // background color (white for ambient occlusion)
 		2, 0.01f,         // lightmap interpolation threshold (small differences are interpolated rather than sampled)
 						  // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 		0.0f);            // modifier for camera-to-surface distance for hemisphere rendering.
-		                  // tweak this to trade-off between interpolated normals quality and other artifacts (see declaration).
+						  // tweak this to trade-off between interpolated normals quality and other artifacts (see declaration).
 
 	if (!ctx)
 	{
@@ -57,22 +67,37 @@ static int bake(scene_t *scene)
 	}
 
 	int w = scene->w, h = scene->h;
-	float *data = calloc(w * h * 4, sizeof(float));
+	float* data = calloc(w * h * 4, sizeof(float));
+	// ³õÊ¼»¯Ä¿±êLightmap£¬ÎªLightmap¸³Öµ
+	// ÉèÖÃäÖÈ¾ÉÏÏÂÎÄ ctx ÖÐlightmap
+	// ÉèÖÃäÖÈ¾targetÊý¾Ý
+	// ÉèÖÃäÖÈ¾¿í¶ÈºÍ¸ß¶È
+	// ÉèÖÃäÖÈ¾Channel
 	lmSetTargetLightmap(ctx, data, w, h, 4);
-
+	// ÉèÖÃäÖÈ¾Êý¾Ý
+	// ÉèÖÃäÖÈ¾Êý¾Ý lmÉÏÏÂÎÄ ±ä»»¾ØÕó 
+	// ÉèÖÃ¶¥µãÊý¾Ý Î»ÖÃÀàÐÍ Î»ÖÃÊý¾Ý Î»ÖÃÊý¾Ý¿ç¶È
+	// ÉèÖÃ·¨ÏßÊý¾Ý ·¨ÏßÀàÐÍ ·¨ÏßÊý¾Ý ·¨ÏßÊý¾Ý¿ç¶È
+	// ÉèÖÃUVÊý¾Ý   UVÀàÐÍ  UVÊý¾Ý   UVÊý¾Ý¿ç¶È
+	// ÉèÖÃË÷ÒýÊý¾Ý Ë÷ÒýÊý¾Ý³¤¶È Ë÷ÒýÊý¾ÝÀàÐÍ Ë÷ÒýÊý¾Ý
 	lmSetGeometry(ctx, NULL,                                                                 // no transformation in this example
 		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, p), sizeof(vertex_t),
-		LM_NONE , NULL                                                   , 0               , // no interpolated normals in this example
+		LM_NONE, NULL, 0, // no interpolated normals in this example
 		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, t), sizeof(vertex_t),
 		scene->indexCount, LM_UNSIGNED_SHORT, scene->indices);
 
 	int vp[4];
 	float view[16], projection[16];
 	double lastUpdateTime = 0.0;
+
+	int tempindex = 0;
+	// ÕýÊ½¿ªÊ¼ºæ±º
 	while (lmBegin(ctx, vp, view, projection))
 	{
 		// render to lightmapper framebuffer
 		glViewport(vp[0], vp[1], vp[2], vp[3]);
+		//lm_setLight(render_view, render_projection);
+
 		drawScene(scene, view, projection);
 
 		// display progress every second (printf is expensive)
@@ -84,14 +109,16 @@ static int bake(scene_t *scene)
 			fflush(stdout);
 		}
 
+		tempindex++;
 		lmEnd(ctx);
 	}
-	printf("\rFinished baking %d triangles.\n", scene->indexCount / 3);
+
+	printf("\rFinished baking %d triangles. index %d\n", scene->indexCount / 3, tempindex);
 
 	lmDestroy(ctx);
 
 	// postprocess texture
-	float *temp = calloc(w * h * 4, sizeof(float));
+	float* temp = calloc(w * h * 4, sizeof(float));
 	for (int i = 0; i < 16; i++)
 	{
 		lmImageDilate(data, temp, w, h, 4);
@@ -99,6 +126,7 @@ static int bake(scene_t *scene)
 	}
 	lmImageSmooth(data, temp, w, h, 4);
 	lmImageDilate(temp, data, w, h, 4);
+	// Gramma½ÃÕý
 	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
 	free(temp);
 
@@ -114,33 +142,48 @@ static int bake(scene_t *scene)
 	return 1;
 }
 
-static void error_callback(int error, const char *description)
+
+static void error_callback(int error, const char* description)
 {
 	fprintf(stderr, "Error: %s\n", description);
 }
 
-static void fpsCameraViewMatrix(GLFWwindow *window, float *view);
-static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar);
+static void fpsCameraViewMatrix(GLFWwindow* window, float* view);
+static void perspectiveMatrix(float* out, float fovy, float aspect, float zNear, float zFar);
 
-static void mainLoop(GLFWwindow *window, scene_t *scene)
+static int bake_status = 0;
+
+static void mainLoop(GLFWwindow* window, scene_t* scene)
 {
 	glfwPollEvents();
 	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-		bake(scene);
+	{
+		if (bake_status != 1)
+		{
+			bake(scene);
+		}
+		bake_status = 1;
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_RELEASE)
+	{
+		bake_status = 0;
+	}
 
 	int w, h;
 	glfwGetFramebufferSize(window, &w, &h);
 	glViewport(0, 0, w, h);
 
 	// camera for glfw window
-	float view[16], projection[16];
-	fpsCameraViewMatrix(window, view);
-	perspectiveMatrix(projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
+	fpsCameraViewMatrix(window, render_view);
+	perspectiveMatrix(render_projection, 45.0f, (float)w / (float)h, 0.01f, 100.0f);
 
 	// draw to screen with a blueish sky
 	glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	drawScene(scene, view, projection);
+	// ¿ªÊ¼ÖðÖ¡»æÖÆ
+	drawScene(scene, render_view, render_projection);
+	//lm_setLight(render_view, render_projection);
 
 	glfwSwapBuffers(window);
 }
@@ -168,7 +211,7 @@ int main(int argc, char* argv[])
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
 
-	GLFWwindow *window = glfwCreateWindow(1024, 768, "Lightmapping Example", NULL, NULL);
+	GLFWwindow* window = glfwCreateWindow(1024, 768, "Lightmapping Example", NULL, NULL);
 	if (!window)
 	{
 		fprintf(stderr, "Could not create window.\n");
@@ -180,7 +223,7 @@ int main(int argc, char* argv[])
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 	glfwSwapInterval(1);
 
-	scene_t scene = {0};
+	//³õÊ¼»¯³¡¾°Êý¾Ý
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
@@ -198,6 +241,7 @@ int main(int argc, char* argv[])
 
 	while (!glfwWindowShouldClose(window))
 	{
+		// Ö÷Ñ­»·
 		mainLoop(window, &scene);
 	}
 
@@ -208,18 +252,21 @@ int main(int argc, char* argv[])
 }
 
 // helpers ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount);
-static GLuint loadProgram(const char *vp, const char *fp, const char **attributes, int attributeCount);
+static int loadSimpleObjFile(const char* filename, vertex_t** vertices, unsigned int* vertexCount, unsigned short** indices, unsigned int* indexCount);
+static GLuint loadProgram(const char* vp, const char* fp, const char** attributes, int attributeCount);
 
-static int initScene(scene_t *scene)
+// ³õÊ¼»¯SceneÊý¾Ý
+static int initScene(scene_t* scene)
 {
-	// load mesh
-	if (!loadSimpleObjFile("gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
+	// load mesh F:\\Document\\Blender\\Monkey.obj loadfileÖ»Ö§³Ö np/nn/ntÊýÁ¿ÏàÍ¬µÄobjÄ£ÐÍ 
+	// load obj µÃµ½¶¥µãÊý¾Ý ¶¥µãÊýÁ¿ Ë÷ÒýÊý¾Ý Ë÷ÒýÊýÁ¿
+	if (!loadSimpleObjFile("D:\\Document\\LightMapper\\lightmapper-master\\example\\gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
 	{
 		fprintf(stderr, "Error loading obj file\n");
 		return 0;
 	}
 
+	// °ó¶¨äÖÈ¾Êý¾Ý bind render data
 	glGenVertexArrays(1, &scene->vao);
 	glBindVertexArray(scene->vao);
 
@@ -249,7 +296,7 @@ static int initScene(scene_t *scene)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, emissive);
 
 	// load shader
-	const char *vp =
+	const char* vp =
 		"#version 150 core\n"
 		"in vec3 a_position;\n"
 		"in vec2 a_texcoord;\n"
@@ -263,7 +310,7 @@ static int initScene(scene_t *scene)
 		"v_texcoord = a_texcoord;\n"
 		"}\n";
 
-	const char *fp =
+	const char* fp =
 		"#version 150 core\n"
 		"in vec2 v_texcoord;\n"
 		"uniform sampler2D u_lightmap;\n"
@@ -274,12 +321,13 @@ static int initScene(scene_t *scene)
 		"o_color = vec4(texture(u_lightmap, v_texcoord).rgb, gl_FrontFacing ? 1.0 : 0.0);\n"
 		"}\n";
 
-	const char *attribs[] =
+	const char* attribs[] =
 	{
 		"a_position",
 		"a_texcoord"
 	};
 
+	// ³õÊ¼»¯ShaderÊý¾Ý
 	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
 	{
@@ -290,10 +338,11 @@ static int initScene(scene_t *scene)
 	scene->u_projection = glGetUniformLocation(scene->program, "u_projection");
 	scene->u_lightmap = glGetUniformLocation(scene->program, "u_lightmap");
 
+	//lm_initLight();
 	return 1;
 }
 
-static void drawScene(scene_t *scene, float *view, float *projection)
+static void drawScene(scene_t* scene, float* view, float* projection)
 {
 	glEnable(GL_DEPTH_TEST);
 
@@ -308,7 +357,7 @@ static void drawScene(scene_t *scene, float *view, float *projection)
 	glDrawElements(GL_TRIANGLES, scene->indexCount, GL_UNSIGNED_SHORT, 0);
 }
 
-static void destroyScene(scene_t *scene)
+static void destroyScene(scene_t* scene)
 {
 	free(scene->vertices);
 	free(scene->indices);
@@ -319,9 +368,10 @@ static void destroyScene(scene_t *scene)
 	glDeleteProgram(scene->program);
 }
 
-static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned int *vertexCount, unsigned short **indices, unsigned int *indexCount)
+// ¼ÓÔØÄ£ÐÍ vertices¶¥µã vertexCountÊýÁ¿ indicesË÷Òý indexCountË÷ÒýÊýÁ¿ 
+static int loadSimpleObjFile(const char* filename, vertex_t** vertices, unsigned int* vertexCount, unsigned short** indices, unsigned int* indexCount)
 {
-	FILE *file = fopen(filename, "rt");
+	FILE* file = fopen(filename, "rt");
 	if (!file)
 		return 0;
 	char line[1024];
@@ -334,12 +384,15 @@ static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned
 		if (line[0] == '#') continue;
 		if (line[0] == 'v')
 		{
-			if (line[1] == ' ') { np++; continue; }
-			if (line[1] == 'n') { nn++; continue; }
-			if (line[1] == 't') { nt++; continue; }
+			if (line[1] == ' ') { np++; continue; }	// v  vertex
+			if (line[1] == 'n') { nn++; continue; } // vn normal
+			if (line[1] == 't') { nt++; continue; } // vt uv
 			assert(!"unknown vertex attribute");
 		}
-		if (line[0] == 'f') { nf++; continue; }
+		if (line[0] == 'f') { nf++; continue; }		// f face
+
+		printf(stderr, "v = %d vn = %d vt = %d f = %d\n", np, nn, nt, nf);
+
 		assert(!"unknown identifier");
 	}
 	assert(np && np == nn && np == nt && nf); // only supports obj files without separately indexed vertex attributes
@@ -359,16 +412,16 @@ static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned
 		if (line[0] == '#') continue;
 		if (line[0] == 'v')
 		{
-			if (line[1] == ' ') { float *p = (*vertices)[cp++].p; char *e1, *e2; p[0] = (float)strtod(line + 2, &e1); p[1] = (float)strtod(e1, &e2); p[2] = (float)strtod(e2, 0); continue; }
+			if (line[1] == ' ') { float* p = (*vertices)[cp++].p; char* e1, * e2; p[0] = (float)strtod(line + 2, &e1); p[1] = (float)strtod(e1, &e2); p[2] = (float)strtod(e2, 0); continue; }
 			if (line[1] == 'n') { /*float *n = (*vertices)[cn++].n; char *e1, *e2; n[0] = (float)strtod(line + 3, &e1); n[1] = (float)strtod(e1, &e2); n[2] = (float)strtod(e2, 0);*/ continue; } // no normals needed
-			if (line[1] == 't') { float *t = (*vertices)[ct++].t; char *e1;      t[0] = (float)strtod(line + 3, &e1); t[1] = (float)strtod(e1, 0);                                continue; }
+			if (line[1] == 't') { float* t = (*vertices)[ct++].t; char* e1;      t[0] = (float)strtod(line + 3, &e1); t[1] = (float)strtod(e1, 0);                                continue; }
 			assert(!"unknown vertex attribute");
 		}
 		if (line[0] == 'f')
 		{
-			unsigned short *tri = (*indices) + cf;
+			unsigned short* tri = (*indices) + cf;
 			cf += 3;
-			char *e1, *e2, *e3 = line + 1;
+			char* e1, * e2, * e3 = line + 1;
 			for (int i = 0; i < 3; i++)
 			{
 				unsigned long pi = strtoul(e3 + 1, &e1, 10);
@@ -388,7 +441,7 @@ static int loadSimpleObjFile(const char *filename, vertex_t **vertices, unsigned
 	return 1;
 }
 
-static GLuint loadShader(GLenum type, const char *source)
+static GLuint loadShader(GLenum type, const char* source)
 {
 	GLuint shader = glCreateShader(type);
 	if (shader == 0)
@@ -417,7 +470,7 @@ static GLuint loadShader(GLenum type, const char *source)
 	}
 	return shader;
 }
-static GLuint loadProgram(const char *vp, const char *fp, const char **attributes, int attributeCount)
+static GLuint loadProgram(const char* vp, const char* fp, const char** attributes, int attributeCount)
 {
 	GLuint vertexShader = loadShader(GL_VERTEX_SHADER, vp);
 	if (!vertexShader)
@@ -464,53 +517,53 @@ static GLuint loadProgram(const char *vp, const char *fp, const char **attribute
 	return program;
 }
 
-static void multiplyMatrices(float *out, float *a, float *b)
+static void multiplyMatrices(float* out, float* a, float* b)
 {
 	for (int y = 0; y < 4; y++)
 		for (int x = 0; x < 4; x++)
 			out[y * 4 + x] = a[x] * b[y * 4] + a[4 + x] * b[y * 4 + 1] + a[8 + x] * b[y * 4 + 2] + a[12 + x] * b[y * 4 + 3];
 }
-static void translationMatrix(float *out, float x, float y, float z)
+static void translationMatrix(float* out, float x, float y, float z)
 {
-	out[ 0] = 1.0f; out[ 1] = 0.0f; out[ 2] = 0.0f; out[ 3] = 0.0f;
-	out[ 4] = 0.0f; out[ 5] = 1.0f; out[ 6] = 0.0f; out[ 7] = 0.0f;
-	out[ 8] = 0.0f; out[ 9] = 0.0f; out[10] = 1.0f; out[11] = 0.0f;
+	out[0] = 1.0f; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f;
+	out[4] = 0.0f; out[5] = 1.0f; out[6] = 0.0f; out[7] = 0.0f;
+	out[8] = 0.0f; out[9] = 0.0f; out[10] = 1.0f; out[11] = 0.0f;
 	out[12] = x;    out[13] = y;    out[14] = z;    out[15] = 1.0f;
 }
-static void rotationMatrix(float *out, float angle, float x, float y, float z)
+static void rotationMatrix(float* out, float angle, float x, float y, float z)
 {
 	angle *= (float)M_PI / 180.0f;
 	float c = cosf(angle), s = sinf(angle), c2 = 1.0f - c;
-	out[ 0] = x*x*c2 + c;   out[ 1] = y*x*c2 + z*s; out[ 2] = x*z*c2 - y*s; out[ 3] = 0.0f;
-	out[ 4] = x*y*c2 - z*s; out[ 5] = y*y*c2 + c;   out[ 6] = y*z*c2 + x*s; out[ 7] = 0.0f;
-	out[ 8] = x*z*c2 + y*s; out[ 9] = y*z*c2 - x*s; out[10] = z*z*c2 + c;   out[11] = 0.0f;
+	out[0] = x * x * c2 + c;   out[1] = y * x * c2 + z * s; out[2] = x * z * c2 - y * s; out[3] = 0.0f;
+	out[4] = x * y * c2 - z * s; out[5] = y * y * c2 + c;   out[6] = y * z * c2 + x * s; out[7] = 0.0f;
+	out[8] = x * z * c2 + y * s; out[9] = y * z * c2 - x * s; out[10] = z * z * c2 + c;   out[11] = 0.0f;
 	out[12] = 0.0f;         out[13] = 0.0f;         out[14] = 0.0f;         out[15] = 1.0f;
 }
-static void transformPosition(float *out, float *m, float *p)
+static void transformPosition(float* out, float* m, float* p)
 {
 	float d = 1.0f / (m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15]);
-	out[2] =     d * (m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]);
-	out[1] =     d * (m[1] * p[0] + m[5] * p[1] + m[ 9] * p[2] + m[13]);
-	out[0] =     d * (m[0] * p[0] + m[4] * p[1] + m[ 8] * p[2] + m[12]);
+	out[2] = d * (m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]);
+	out[1] = d * (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]);
+	out[0] = d * (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]);
 }
-static void transposeMatrix(float *out, float *m)
+static void transposeMatrix(float* out, float* m)
 {
-	out[ 0] = m[0]; out[ 1] = m[4]; out[ 2] = m[ 8]; out[ 3] = m[12];
-	out[ 4] = m[1]; out[ 5] = m[5]; out[ 6] = m[ 9]; out[ 7] = m[13];
-	out[ 8] = m[2]; out[ 9] = m[6]; out[10] = m[10]; out[11] = m[14];
+	out[0] = m[0]; out[1] = m[4]; out[2] = m[8]; out[3] = m[12];
+	out[4] = m[1]; out[5] = m[5]; out[6] = m[9]; out[7] = m[13];
+	out[8] = m[2]; out[9] = m[6]; out[10] = m[10]; out[11] = m[14];
 	out[12] = m[3]; out[13] = m[7]; out[14] = m[11]; out[15] = m[15];
 }
-static void perspectiveMatrix(float *out, float fovy, float aspect, float zNear, float zFar)
+static void perspectiveMatrix(float* out, float fovy, float aspect, float zNear, float zFar)
 {
 	float f = 1.0f / tanf(fovy * (float)M_PI / 360.0f);
 	float izFN = 1.0f / (zNear - zFar);
-	out[ 0] = f / aspect; out[ 1] = 0.0f; out[ 2] = 0.0f;                       out[ 3] = 0.0f;
-	out[ 4] = 0.0f;       out[ 5] = f;    out[ 6] = 0.0f;                       out[ 7] = 0.0f;
-	out[ 8] = 0.0f;       out[ 9] = 0.0f; out[10] = (zFar + zNear) * izFN;      out[11] = -1.0f;
+	out[0] = f / aspect; out[1] = 0.0f; out[2] = 0.0f;                       out[3] = 0.0f;
+	out[4] = 0.0f;       out[5] = f;    out[6] = 0.0f;                       out[7] = 0.0f;
+	out[8] = 0.0f;       out[9] = 0.0f; out[10] = (zFar + zNear) * izFN;      out[11] = -1.0f;
 	out[12] = 0.0f;       out[13] = 0.0f; out[14] = 2.0f * zFar * zNear * izFN; out[15] = 0.0f;
 }
 
-static void fpsCameraViewMatrix(GLFWwindow *window, float *view)
+static void fpsCameraViewMatrix(GLFWwindow* window, float* view)
 {
 	// initial camera config
 	static float position[] = { 0.0f, 0.3f, 1.5f };
@@ -535,7 +588,7 @@ static void fpsCameraViewMatrix(GLFWwindow *window, float *view)
 
 	// keyboard movement (WSADEQ)
 	float speed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 0.1f : 0.01f;
-	float movement[3] = {0};
+	float movement[3] = { 0 };
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) movement[2] -= speed;
 	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) movement[2] += speed;
 	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) movement[0] -= speed;
