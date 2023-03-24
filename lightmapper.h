@@ -71,7 +71,6 @@ void lmSetGeometry(lm_context* ctx,
 	lm_type lightmapCoordsType, const void* lightmapCoordsUV, int lightmapCoordsStride,                // lightmap atlas texture coordinates for the mesh [0..1]x[0..1] (integer types are normalized to 0..1 range).
 	int count, lm_type indicesType LM_DEFAULT_VALUE(LM_NONE), const void* indices LM_DEFAULT_VALUE(0));// if mesh indices are used, count = number of indices else count = number of vertices.
 
-
 // as long as lmBegin returns true, the scene has to be rendered with the
 // returned camera and view parameters to the currently bound framebuffer.
 // if lmBegin returns true, it must be followed by lmEnd after rendering!
@@ -346,8 +345,13 @@ struct lm_context
 			GLuint hemispheresTextureID;
 			GLuint weightsTextureID;
 			GLuint weightsTexture;
-			GLuint lightPos;
-			GLuint viewPos;
+
+			GLuint normal;
+			GLuint position;
+			GLuint viewPosition;
+			GLuint lightDirection;
+			GLuint lightColor;
+			GLuint enviormentColor;
 		} firstPass;
 		struct
 		{
@@ -361,7 +365,20 @@ struct lm_context
 			lm_ivec2* toLightmapLocation;
 		} storage;
 	} hemisphere;
+	struct
+	{
+		struct
+		{
+			lm_vec3 direction;
+			lm_vec3 color;
+		}driectionlight;
 
+		lm_vec3 enviromentColor;
+	} enviorment;
+	struct
+	{
+		lm_vec3 position;
+	} view;
 	float interpolationThreshold;
 };
 
@@ -662,10 +679,22 @@ static void lm_integrateHemisphereBatch(lm_context* ctx)
 	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_2D, ctx->hemisphere.firstPass.weightsTexture);
 
-	GLfloat viewPos[] = { ctx->meshPosition.sample.position.x, ctx->meshPosition.sample.position.y, ctx->meshPosition.sample.position.z };
-	glUniform3fv(ctx->hemisphere.firstPass.viewPos, 1, viewPos);
-	GLfloat lightPos[] = { 3.0f, 3.0f, 3.0f };
-	glUniform3fv(ctx->hemisphere.firstPass.lightPos, 1, lightPos);
+	//设定shader信息
+	GLfloat position[] = {ctx->meshPosition.sample.position.x,ctx->meshPosition.sample.position.y, ctx->meshPosition.sample.position.z};
+	glUniform3fv(ctx->hemisphere.firstPass.position, 1, position);
+	GLfloat normal[] = { ctx->meshPosition.sample.direction.x,ctx->meshPosition.sample.direction.y, ctx->meshPosition.sample.direction.z };
+	glUniform3fv(ctx->hemisphere.firstPass.normal, 1, normal);
+
+	GLfloat viewPosition[] = { ctx->view.position.x, ctx->view.position.y, ctx->view.position.z };
+	glUniform3fv(ctx->hemisphere.firstPass.viewPosition, 1, viewPosition);
+
+	GLfloat lightDirection[] = { ctx->enviorment.driectionlight.direction.x, ctx->enviorment.driectionlight.direction.y, ctx->enviorment.driectionlight.direction.z };
+	glUniform3fv(ctx->hemisphere.firstPass.lightDirection, 1, lightDirection);
+	GLfloat lightColor[] = { ctx->enviorment.driectionlight.color.x, ctx->enviorment.driectionlight.color.y, ctx->enviorment.driectionlight.color.z };
+	glUniform3fv(ctx->hemisphere.firstPass.lightColor, 1, lightColor);
+
+	GLfloat enviormentColor[] = { ctx->enviorment.enviromentColor.x, ctx->enviorment.enviromentColor.y, ctx->enviorment.enviromentColor.z };
+	glUniform3fv(ctx->hemisphere.firstPass.enviormentColor, 1, enviormentColor);
 
 	glActiveTexture(GL_TEXTURE0);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -970,11 +999,6 @@ static lm_bool lm_beginSampleHemisphere(lm_context* ctx, int* viewport, float* v
 		// 五次采样初设定位置
 		ctx->hemisphere.fbHemiToLightmapLocation[ctx->hemisphere.fbHemiIndex] =
 			lm_i2(ctx->meshPosition.rasterizer.x, ctx->meshPosition.rasterizer.y);
-
-		if (ctx->hemisphere.fbHemiIndex == 0)
-		{
-			//lmSetHemisphereWeights(ctx,lm_defaultWeights,0);
-		}
 	}
 
 	// find the target position in the batch
@@ -1393,8 +1417,16 @@ lm_context* lmCreate(int hemisphereSize, float zNear, float zFar,
 			"#version 150 core\n"
 			"uniform sampler2D hemispheres;\n"
 			"uniform sampler2D weights;\n"
-			"uniform vec3 lightPos;\n"
-			"uniform vec3 viewPos;\n"
+
+			"uniform vec3 normal;\n"
+			"uniform vec3 position;\n"
+
+			"uniform vec3 viewPosition;\n"
+
+			"uniform vec3 lightDirection;\n"
+			"uniform vec3 lightColor;\n"
+
+			"uniform vec3 enviormentColor;\n"
 
 			"layout(pixel_center_integer) in vec4 gl_FragCoord;\n" // whole integer values represent pixel centers, GL_ARB_fragment_coord_conventions
 
@@ -1424,11 +1456,17 @@ lm_context* lmCreate(int hemisphereSize, float zNear, float zFar,
 			"vec4 rb = threeWeightedSamples(h_uv, w_uv, ivec2(1, 0));\n"
 			"vec4 lt = threeWeightedSamples(h_uv, w_uv, ivec2(0, 1));\n"
 			"vec4 rt = threeWeightedSamples(h_uv, w_uv, ivec2(1, 1));\n"
-			"vec3 lightDir = normalize(vec3(1.0f, 1.0f, 1.0f));\n"
-			"vec3 viewDir = normalize(viewPos);\n"
-			"float intensity = max(dot(lightDir,viewDir),0.0);\n"
-			"outColor = lb + rb + lt + rt;\n"
-			"outColor = vec4(intensity,intensity,intensity,1.0);\n"
+
+			"vec3 lightDir = normalize(lightDirection);\n"
+			"vec3 normalDir = normalize(normal);\n"
+			"vec3 diffuse = max(dot(normalDir,lightDir),0.0) * lightColor;\n"
+
+			"vec3 viewDir = normalize(viewPosition - position);\n"
+			"vec3 halfDir = normalize(viewDir + lightDir);\n"
+			"vec3 specular = pow(max(dot(normal,halfDir),0.0),10) * lightColor;\n"
+
+			//"outColor = lb + rb + lt + rt;\n"
+			"outColor = (lb + rb + lt + rt) + vec4(diffuse.xyz + enviormentColor.xyz,1.0);\n"
 			"}\n";
 		ctx->hemisphere.firstPass.programID = lm_LoadProgram(vs, fs);
 		if (!ctx->hemisphere.firstPass.programID)
@@ -1443,8 +1481,13 @@ lm_context* lmCreate(int hemisphereSize, float zNear, float zFar,
 		}
 		ctx->hemisphere.firstPass.hemispheresTextureID = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "hemispheres");
 		ctx->hemisphere.firstPass.weightsTextureID = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "weights");
-		ctx->hemisphere.firstPass.lightPos = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "lightPos");
-		ctx->hemisphere.firstPass.viewPos = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "viewPos");
+
+		ctx->hemisphere.firstPass.normal = glGetUniformLocation(ctx->hemisphere.firstPass.programID,"normal");
+		ctx->hemisphere.firstPass.position = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "position");
+		ctx->hemisphere.firstPass.viewPosition = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "viewPosition");
+		ctx->hemisphere.firstPass.lightDirection = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "lightDirection");
+		ctx->hemisphere.firstPass.lightColor = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "lightColor");
+		ctx->hemisphere.firstPass.enviormentColor = glGetUniformLocation(ctx->hemisphere.firstPass.programID, "enviormentColor");
 	}
 
 	// downsample shader
@@ -1502,6 +1545,14 @@ lm_context* lmCreate(int hemisphereSize, float zNear, float zFar,
 	return ctx;
 }
 
+void lmSetEnviorment(lm_context* ctx, lm_vec3 enviormentColor, lm_vec3 direction,lm_vec3 lightColor)
+{
+	ctx->enviorment.enviromentColor = enviormentColor;
+
+	ctx->enviorment.driectionlight.direction = direction;
+	ctx->enviorment.driectionlight.color = lightColor;
+}
+
 void lmDestroy(lm_context* ctx)
 {
 	// reset state
@@ -1553,7 +1604,6 @@ void lmSetHemisphereWeights(lm_context* ctx, lm_weight_func f, void* userdata)
 			float* w1 = w0 + 2 * ctx->hemisphere.size;
 			float* w2 = w1 + 2 * ctx->hemisphere.size;
 
-			float temp = f(v.z, userdata);
 			// center weights
 			w0[0] = solidAngle * f(v.z, userdata);
 			w0[1] = solidAngle;
@@ -1574,7 +1624,6 @@ void lmSetHemisphereWeights(lm_context* ctx, lm_weight_func f, void* userdata)
 	float weightScale = (float)(1.0 / sum);
 	for (unsigned int i = 0; i < 2 * 3 * ctx->hemisphere.size * ctx->hemisphere.size; i++)
 	{
-		//weights[i] = 0;
 		weights[i] *= weightScale;
 	}
 
@@ -1643,9 +1692,10 @@ void lmSetGeometry(lm_context* ctx,
 	lm_setMeshPosition(ctx, 0);
 }
 
-int index0 = 0;
-int index1 = 0;
-int index2 = 0;
+void lmSetView(lm_context* ctx, lm_vec3 position)
+{
+	ctx->view.position = position;
+}
 
 lm_bool lmBegin(lm_context* ctx, int* outViewport4, float* outView4x4, float* outProjection4x4)
 {
@@ -1658,20 +1708,17 @@ lm_bool lmBegin(lm_context* ctx, int* outViewport4, float* outView4x4, float* ou
 		if (lm_findNextConservativeTriangleRasterizerPosition(ctx)) // 光栅化一个三角面
 		{ // if we successfully moved to the next sample position on the current triangle...
 			ctx->meshPosition.hemisphere.side = 0; // start sampling a hemisphere there
-			index0++;
 		}
 		else														//光栅化下一个三角面
 		{ // if there are no valid sample positions on the current triangle...
 			if (ctx->meshPosition.triangle.baseIndex + 3 < ctx->mesh.count)
 			{
-				index1++;
 				// 设置数据Index位置
 				// ...and there are triangles left: move to the next triangle and continue sampling.
 				lm_setMeshPosition(ctx, ctx->meshPosition.triangle.baseIndex + 3);
 			}
 			else													//一个pass结束
 			{
-				index2++;
 				//当前Pass执行结束
 				// ...and there are no triangles left: finish
 				lm_integrateHemisphereBatch(ctx); // integrate and store last batch
@@ -1945,9 +1992,8 @@ lm_bool lmImageSaveTGAf(const char* filename, const float* image, int w, int h, 
 {
 	unsigned char* temp = (unsigned char*)LM_CALLOC(w * h * c, sizeof(unsigned char));
 	lmImageFtoUB(image, temp, w, h, c, max);
-	lm_bool success = lmImageSaveTGAub(filename, temp, w, h, c);
+	lm_bool success = lmImageSaveTGAub(filename, image, w, h, c);
 	LM_FREE(temp);
 	return success;
 }
-
 #endif // LIGHTMAPPER_IMPLEMENTATION

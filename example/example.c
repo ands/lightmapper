@@ -29,10 +29,10 @@ typedef struct
 	GLuint lightmap;		// lightmap texture
 	int w, h;				// width height
 
-	GLuint vao, vbo, ibo;	// vao / vbo /ibo	¶¥µãÊý¾Ý / »º´æ¶¥µãÊý¾Ý / ¶¥µãË÷ÒýÊý¾Ý
-	vertex_t* vertices;		// ¶¥µãÊý¾Ý
-	unsigned short* indices;// ¶¥µãË÷ÒýÊý¾Ý
-	unsigned int vertexCount, indexCount;	// ¶¥µãÊý¾ÝÊýÁ¿ ¶¥µãË÷ÒýÊýÁ¿
+	GLuint vao, vbo, ibo;	
+	vertex_t* vertices;		
+	unsigned short* indices;
+	unsigned int vertexCount, indexCount;
 } scene_t;
 
 static int initScene(scene_t* scene);
@@ -40,21 +40,16 @@ static void drawScene(scene_t* scene, float* view, float* projection);
 static void destroyScene(scene_t* scene);
 
 scene_t scene = { 0 };
+lm_context* ctx;
 
 float render_view[16], render_projection[16];
 
 static int bake(scene_t* scene)
 {
-	// ´´½¨LightMapÉÏÏÂÎÄ
-	// ·Ö±æÂÊ
-	// Ïà»ú zNera / zFar
-	// BackgroundClear clearR clearG clearB
-	// ²åÖµpass ²åÖµãÐÖµ
-	// Ïà»ú±íÃæ¾àÀëÐÞ¸ÄÆ÷
-	lm_context* ctx = lmCreate(
+	ctx = lmCreate(
 		512,               // hemisphere resolution (power of two, max=512)
 		0.001f, 100.0f,   // zNear, zFar of hemisphere cameras
-		0.0f, 0.0f, 0.0f, // background color (white for ambient occlusion)
+		1.0f, 1.0f, 1.0f, // background color (white for ambient occlusion)
 		2, 0.01f,         // lightmap interpolation threshold (small differences are interpolated rather than sampled)
 						  // check debug_interpolation.tga for an overview of sampled (red) vs interpolated (green) pixels.
 		0.0f);            // modifier for camera-to-surface distance for hemisphere rendering.
@@ -66,20 +61,15 @@ static int bake(scene_t* scene)
 		return 0;
 	}
 
+	//设置环境光
+	lm_vec3 enviormentColor = lm_v3(0.2f, 0.2f, 0.2f);
+	lm_vec3 direction = lm_v3(3.0f, 3.0f, 3.0f);
+	lm_vec3 lightColor = lm_v3(1.0f, 1.0f, 1.0f);
+	lmSetEnviorment(ctx, enviormentColor, direction, lightColor);
+
 	int w = scene->w, h = scene->h;
 	float* data = calloc(w * h * 4, sizeof(float));
-	// ³õÊ¼»¯Ä¿±êLightmap£¬ÎªLightmap¸³Öµ
-	// ÉèÖÃäÖÈ¾ÉÏÏÂÎÄ ctx ÖÐlightmap
-	// ÉèÖÃäÖÈ¾targetÊý¾Ý
-	// ÉèÖÃäÖÈ¾¿í¶ÈºÍ¸ß¶È
-	// ÉèÖÃäÖÈ¾Channel
 	lmSetTargetLightmap(ctx, data, w, h, 4);
-	// ÉèÖÃäÖÈ¾Êý¾Ý
-	// ÉèÖÃäÖÈ¾Êý¾Ý lmÉÏÏÂÎÄ ±ä»»¾ØÕó 
-	// ÉèÖÃ¶¥µãÊý¾Ý Î»ÖÃÀàÐÍ Î»ÖÃÊý¾Ý Î»ÖÃÊý¾Ý¿ç¶È
-	// ÉèÖÃ·¨ÏßÊý¾Ý ·¨ÏßÀàÐÍ ·¨ÏßÊý¾Ý ·¨ÏßÊý¾Ý¿ç¶È
-	// ÉèÖÃUVÊý¾Ý   UVÀàÐÍ  UVÊý¾Ý   UVÊý¾Ý¿ç¶È
-	// ÉèÖÃË÷ÒýÊý¾Ý Ë÷ÒýÊý¾Ý³¤¶È Ë÷ÒýÊý¾ÝÀàÐÍ Ë÷ÒýÊý¾Ý
 	lmSetGeometry(ctx, NULL,                                                                 // no transformation in this example
 		LM_FLOAT, (unsigned char*)scene->vertices + offsetof(vertex_t, p), sizeof(vertex_t),
 		LM_NONE, NULL, 0, // no interpolated normals in this example
@@ -91,12 +81,10 @@ static int bake(scene_t* scene)
 	double lastUpdateTime = 0.0;
 
 	int tempindex = 0;
-	// ÕýÊ½¿ªÊ¼ºæ±º
 	while (lmBegin(ctx, vp, view, projection))
 	{
 		// render to lightmapper framebuffer
 		glViewport(vp[0], vp[1], vp[2], vp[3]);
-		//lm_setLight(render_view, render_projection);
 
 		drawScene(scene, view, projection);
 
@@ -126,13 +114,16 @@ static int bake(scene_t* scene)
 	}
 	lmImageSmooth(data, temp, w, h, 4);
 	lmImageDilate(temp, data, w, h, 4);
-	// Gramma½ÃÕý
+	// Gamma矫正
 	lmImagePower(data, w, h, 4, 1.0f / 2.2f, 0x7); // gamma correct color channels
 	free(temp);
 
 	// save result to a file
 	if (lmImageSaveTGAf("result.tga", data, w, h, 4, 1.0f))
 		printf("Saved result.tga\n");
+
+	FILE* p = fopen("GL_light.data", "wb");
+	size_t count = fwrite(data, sizeof(float), w * h * 4, p);
 
 	// upload result
 	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
@@ -142,6 +133,20 @@ static int bake(scene_t* scene)
 	return 1;
 }
 
+static int initLightmap(scene_t* scene)
+{	int w = scene->w, h = scene->h;
+	float* data = calloc(w * h * 4, sizeof(float));
+
+	FILE* p = fopen("GL_light.data", "rb");
+	size_t count = fread(data, sizeof(float), w * h * 4, p);
+
+	// upload result
+	glBindTexture(GL_TEXTURE_2D, scene->lightmap);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data);
+	free(data);
+
+	return 1;
+}
 
 static void error_callback(int error, const char* description)
 {
@@ -181,7 +186,6 @@ static void mainLoop(GLFWwindow* window, scene_t* scene)
 	// draw to screen with a blueish sky
 	glClearColor(0.6f, 0.8f, 1.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	// ¿ªÊ¼ÖðÖ¡»æÖÆ
 	drawScene(scene, render_view, render_projection);
 	//lm_setLight(render_view, render_projection);
 
@@ -223,7 +227,6 @@ int main(int argc, char* argv[])
 	gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 	glfwSwapInterval(1);
 
-	//³õÊ¼»¯³¡¾°Êý¾Ý
 	if (!initScene(&scene))
 	{
 		fprintf(stderr, "Could not initialize scene.\n");
@@ -239,9 +242,10 @@ int main(int argc, char* argv[])
 	printf("1. The mesh itself (initially black)\n");
 	printf("2. A white sky (1.0f, 1.0f, 1.0f)\n");
 
+	initLightmap(&scene);
+
 	while (!glfwWindowShouldClose(window))
 	{
-		// Ö÷Ñ­»·
 		mainLoop(window, &scene);
 	}
 
@@ -255,18 +259,14 @@ int main(int argc, char* argv[])
 static int loadSimpleObjFile(const char* filename, vertex_t** vertices, unsigned int* vertexCount, unsigned short** indices, unsigned int* indexCount);
 static GLuint loadProgram(const char* vp, const char* fp, const char** attributes, int attributeCount);
 
-// ³õÊ¼»¯SceneÊý¾Ý
 static int initScene(scene_t* scene)
 {
-	// load mesh F:\\Document\\Blender\\Monkey.obj loadfileÖ»Ö§³Ö np/nn/ntÊýÁ¿ÏàÍ¬µÄobjÄ£ÐÍ 
-	// load obj µÃµ½¶¥µãÊý¾Ý ¶¥µãÊýÁ¿ Ë÷ÒýÊý¾Ý Ë÷ÒýÊýÁ¿
-	if (!loadSimpleObjFile("D:\\Document\\LightMapper\\lightmapper-master\\example\\gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
+	if (!loadSimpleObjFile("D:\\Document\\LightMapper\\lightmapper\\example\\gazebo.obj", &scene->vertices, &scene->vertexCount, &scene->indices, &scene->indexCount))
 	{
 		fprintf(stderr, "Error loading obj file\n");
 		return 0;
 	}
 
-	// °ó¶¨äÖÈ¾Êý¾Ý bind render data
 	glGenVertexArrays(1, &scene->vao);
 	glBindVertexArray(scene->vao);
 
@@ -327,7 +327,6 @@ static int initScene(scene_t* scene)
 		"a_texcoord"
 	};
 
-	// ³õÊ¼»¯ShaderÊý¾Ý
 	scene->program = loadProgram(vp, fp, attribs, 2);
 	if (!scene->program)
 	{
@@ -338,7 +337,6 @@ static int initScene(scene_t* scene)
 	scene->u_projection = glGetUniformLocation(scene->program, "u_projection");
 	scene->u_lightmap = glGetUniformLocation(scene->program, "u_lightmap");
 
-	//lm_initLight();
 	return 1;
 }
 
@@ -368,7 +366,6 @@ static void destroyScene(scene_t* scene)
 	glDeleteProgram(scene->program);
 }
 
-// ¼ÓÔØÄ£ÐÍ vertices¶¥µã vertexCountÊýÁ¿ indicesË÷Òý indexCountË÷ÒýÊýÁ¿ 
 static int loadSimpleObjFile(const char* filename, vertex_t** vertices, unsigned int* vertexCount, unsigned short** indices, unsigned int* indexCount)
 {
 	FILE* file = fopen(filename, "rt");
@@ -607,4 +604,10 @@ static void fpsCameraViewMatrix(GLFWwindow* window, float* view)
 	transposeMatrix(inverseRotation, rotationYX);
 	translationMatrix(inverseTranslation, -position[0], -position[1], -position[2]);
 	multiplyMatrices(view, inverseRotation, inverseTranslation); // = inverse(translation(position) * rotationYX);
+
+	if (ctx)
+	{
+		lm_vec3 curr_position = lm_v3(position[0], position[1], position[2]);
+		lmSetView(ctx, curr_position);
+	}
 }
